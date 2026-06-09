@@ -14,7 +14,9 @@ by a scheduled GitHub Action — never by the browser.
 GitHub Action (cron, twice daily)
   → fetch artificialanalysis.ai server-side (no CORS proxy)
   → parse the leaderboard table  (scripts/scrape.mjs)
-  → commit data.json IF it changed
+  → classify open/closed weights  (scripts/classify.mjs)
+        curated lists for known creators + Hugging Face lookup for unknown ones
+  → commit data.json IF it changed   (each row: model, creator, intel, price, open)
         → GitHub Pages serves the new data.json
 index.html  → fetch ./data.json  (same origin, static)
 ```
@@ -39,6 +41,7 @@ the Action or consume any quota:
 | `index.html` | The whole app (canvas charts + UI), loads `./data.json`. |
 | `data.json` | Scraped leaderboard data, committed by the Action. |
 | `scripts/scrape.mjs` | Server-side scraper (Node 22, no dependencies). |
+| `scripts/classify.mjs` | Open/closed classification (curated lists + Hugging Face). |
 | `.github/workflows/update-leaderboard.yml` | Scheduled updater. |
 
 ## Run the scraper locally

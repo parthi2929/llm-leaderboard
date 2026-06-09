@@ -262,10 +262,13 @@ const app = {
   },
 
   // ── Parse the leaderboard HTML into model records ─────────────────────────
-  // Map [model, creator, intel, price] tuples into full records (adds open flag).
+  // Map tuples into full records. data.json carries an authoritative open flag
+  // as a 5th element (resolved server-side via curated lists + Hugging Face); the
+  // embedded snapshot has 4 elements, so fall back to the local heuristic there.
   mapTuples(tuples) {
-    return tuples.map(([model, creator, intel, price]) => ({
-      model, creator, intel, price, open: this.isOpen(model, creator)
+    return tuples.map(([model, creator, intel, price, open]) => ({
+      model, creator, intel, price,
+      open: typeof open === 'boolean' ? open : this.isOpen(model, creator)
     }));
   },
 

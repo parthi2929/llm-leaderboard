@@ -9,6 +9,7 @@
 // the previous data.json untouched so a bad scrape never destroys good data).
 
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { classifyModels } from './classify.mjs';
 
 const SOURCE = 'https://artificialanalysis.ai/leaderboards/models';
 const OUT = new URL('../data.json', import.meta.url);
@@ -75,24 +76,33 @@ function parse(html) {
   return out;
 }
 
-function main() {
-  return fetchPage(SOURCE).then((html) => {
-    const models = parse(html);
-    console.log(`Parsed ${models.length} models.`);
+async function main() {
+  const html = await fetchPage(SOURCE);
+  const parsed = parse(html);
+  console.log(`Parsed ${parsed.length} models.`);
 
-    if (models.length < MIN_ROWS) {
-      console.error(
-        `Refusing to write: only ${models.length} rows (< ${MIN_ROWS}). ` +
-          'Keeping previous data.json. Page layout may have changed.'
-      );
-      process.exit(2);
-    }
+  if (parsed.length < MIN_ROWS) {
+    console.error(
+      `Refusing to write: only ${parsed.length} rows (< ${MIN_ROWS}). ` +
+        'Keeping previous data.json. Page layout may have changed.'
+    );
+    process.exit(2);
+  }
 
+  // Resolve open/closed (curated lists + Hugging Face for unknown creators).
+  const { models, report } = await classifyModels(parsed);
+  console.log(
+    `Classified: ${report.override} override, ${report.knownOpen} known-open, ` +
+      `${report.knownClosed} known-closed, ${report.hfOpen} HF-open, ` +
+      `${report.hfClosedOrUnknown} HF-closed/unknown.`
+  );
+
+  {
     const payload = {
       source: SOURCE,
       updated: new Date().toISOString(),
       count: models.length,
-      // [model, creator, intelligenceIndex, blendedUsdPer1M]
+      // [model, creator, intelligenceIndex, blendedUsdPer1M, openWeights]
       models,
     };
     const json = JSON.stringify(payload, null, 0) + '\n';
@@ -110,7 +120,7 @@ function main() {
 
     writeFileSync(OUT, json);
     console.log(`Wrote ${OUT.pathname} (${models.length} models).`);
-  });
+  }
 }
 
 main().catch((err) => {
