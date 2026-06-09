@@ -11,15 +11,18 @@ The page reads a static `data.json` from its own origin. That file is refreshed
 by a scheduled GitHub Action — never by the browser.
 
 ```
-GitHub Action (cron, twice daily)
+GitHub Action (on push to main, + cron twice daily)
   → fetch artificialanalysis.ai server-side (no CORS proxy)
-  → parse the leaderboard table  (scripts/scrape.mjs)
+  → parse the leaderboard table   (scripts/scrape.mjs)
   → classify open/closed weights  (scripts/classify.mjs)
         curated lists for known creators + Hugging Face lookup for unknown ones
-  → commit data.json IF it changed   (each row: model, creator, intel, price, open)
-        → GitHub Pages serves the new data.json
+  → commit refreshed data.json IF it changed   (row: model, creator, intel, price, open)
+  → stamp the commit SHA into index.html and deploy to Pages (Actions artifact)
 index.html  → fetch ./data.json  (same origin, static)
 ```
+
+The footer shows `build <short-sha> · <utc-time>` so you can confirm which commit
+the live page was built from.
 
 There is **no backend a visitor can call**, so no amount of page traffic can run
 the Action or consume any quota:

@@ -1,0 +1,81 @@
+name: Build and deploy to Pages
+
+# Scrapes the leaderboard, stamps the commit SHA into the page, and deploys to
+# GitHub Pages via the Actions artifact (not a branch commit), so the deployed
+# bytes carry a verifiable build stamp with no commit loop.
+#
+# Security: only a push to main (by a human collaborator), the cron, or a manual
+# dispatch can run this — nothing a site visitor does can. The data commit-back
+# uses GITHUB_TOKEN, whose pushes do not re-trigger workflows, so there's no loop.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 5,17 * * *'   # twice daily data refresh (UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # commit a refreshed data.json back to the repo
+  pages: write      # deploy to Pages
+  id-token: write   # OIDC token the Pages deploy requires
+
+# Let an in-flight deploy finish rather than cancelling it midway.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      # Refresh data.json. Non-fatal: if the scrape fails or finds too few rows
+      # it leaves the committed data.json in place and we still deploy.
+      - name: Scrape leaderboard
+        continue-on-error: true
+        run: node scripts/scrape.mjs
+
+      - name: Commit refreshed data.json if it changed
+        run: |
+          if git diff --quiet -- data.json; then
+            echo "No data.json change."
+          else
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data.json   # stage ONLY data.json — index.html is stamped below and must stay unstamped in the repo
+            git commit -m "data: refresh leaderboard ($(date -u +%Y-%m-%dT%H:%MZ))"
+            git push
+          fi
+
+      # Assemble the deploy directory and stamp the build identifier into it.
+      - name: Stage site with build stamp
+        run: |
+          STAMP="$(git rev-parse --short HEAD) · $(date -u +%Y-%m-%dT%H:%MZ)"
+          mkdir -p _site
+          cp data.json _site/data.json
+          sed "s|__BUILD_SHA__|${STAMP}|" index.html > _site/index.html
+          echo "Stamped build: ${STAMP}"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: _site
+
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

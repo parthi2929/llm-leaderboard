@@ -89,6 +89,7 @@
   </p>
 
   <div id="last-updated"></div>
+  <div id="build" style="text-align:center;font-size:10px;color:#475569;margin:3px 0 0">__BUILD_SHA__</div>
 </div>
 
 <script>
@@ -295,8 +296,7 @@ const app = {
       const openCount = this.allData.filter(d => d.open).length;
       const n = this.allData.length;
       document.getElementById('last-updated').textContent =
-        '⏱ Data updated: ' + this.lastFetch.toLocaleString() +
-        ' · ' + n + ' models (auto-updated daily via GitHub Actions)';
+        '⏱ Data updated: ' + this.lastFetch.toLocaleString() + ' · ' + n + ' models';
       this.setStatus('✅ ' + n + ' models · ' + openCount + ' open / ' + (n - openCount) + ' closed', 'ok');
       this.draw();
     } catch (e) {
@@ -627,6 +627,11 @@ const app = {
 
   // ── Init ──────────────────────────────────────────────────────────────────
   init() {
+    // Build stamp: replaced with the commit SHA + time at deploy; left as the
+    // raw token when served unstamped (local dev).
+    const buildEl = document.getElementById('build');
+    buildEl.textContent = buildEl.textContent.includes('__') ? 'dev build' : 'build ' + buildEl.textContent;
+
     // Control listeners
     document.getElementById('topN').addEventListener('input', e => {
       document.getElementById('topNVal').textContent = e.target.value;
