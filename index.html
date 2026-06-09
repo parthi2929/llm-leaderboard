@@ -92,17 +92,13 @@
 
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-// Public CORS proxies, tried in order. corsproxy.io's free tier no longer allows
-// server-side requests, so allorigins is the primary. Each entry is a function
-// that wraps the target URL.
-const CORS_PROXIES = [
-  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
-  url => 'https://thingproxy.freeboard.io/fetch/' + url,
-  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
-];
+// Data is scraped server-side by a scheduled GitHub Action (scripts/scrape.mjs)
+// and committed to data.json next to this page. We load that static, same-origin
+// file — no CORS proxies, no client-side scraping. The embedded SNAPSHOT below is
+// the offline fallback if data.json is ever missing.
+const DATA_URL   = './data.json';
 const AA_URL     = 'https://artificialanalysis.ai/leaderboards/models';
-const HF_API     = 'https://huggingface.co/api/models';
-const REFRESH_MS = 5 * 60 * 1000; // auto-refresh every 5 minutes
+const REFRESH_MS = 30 * 60 * 1000; // re-read data.json every 30 minutes
 
 // Embedded snapshot (top 60 by intelligence) used as a fallback so the charts
 // always render even when every live proxy is unreachable. Format: [model, creator, intel, price].
@@ -260,76 +256,50 @@ const app = {
   },
 
   // ── Parse the leaderboard HTML into model records ─────────────────────────
-  parseHTML(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const rows = [...doc.querySelectorAll('table tr')];
-    const parsed = [];
-    rows.slice(1).forEach(row => {
-      const cells = [...row.querySelectorAll('td')];
-      if (cells.length < 5) return;
-      // Columns: 0=Model, 1=Context, 2=Creator, 3=Intelligence, 4=Blended price
-      const model   = (cells[0]?.textContent || '').trim().split('\n')[0];
-      const creator = (cells[2]?.textContent || '').trim().split('\n')[0];
-      const intel   = parseFloat((cells[3]?.textContent || '').trim());
-      const price   = parseFloat((cells[4]?.textContent || '').trim().replace(/[$,]/g,''));
-      if (model && !isNaN(intel) && !isNaN(price) && price >= 0) {
-        parsed.push({
-          model: model.replace(/\s+/g,' ').trim(),
-          creator: (creator || 'Unknown').trim(),
-          intel,
-          price,
-          open: this.isOpen(model, creator || '')
-        });
-      }
-    });
-    return parsed;
+  // Map [model, creator, intel, price] tuples into full records (adds open flag).
+  mapTuples(tuples) {
+    return tuples.map(([model, creator, intel, price]) => ({
+      model, creator, intel, price, open: this.isOpen(model, creator)
+    }));
   },
 
   // ── Load the embedded snapshot as a fallback ──────────────────────────────
   loadSnapshot() {
-    this.allData = SNAPSHOT.map(([model, creator, intel, price]) => ({
-      model, creator, intel, price, open: this.isOpen(model, creator)
-    }));
+    this.allData = this.mapTuples(SNAPSHOT);
     this.draw();
   },
 
-  // ── Fetch and parse leaderboard via CORS proxy, with fallbacks ────────────
+  // ── Load leaderboard from the committed data.json (same origin) ────────────
   async fetchData() {
-    this.setStatus('⏳ Fetching live leaderboard…', 'loading');
-    let lastErr = null;
+    this.setStatus('⏳ Loading leaderboard…', 'loading');
+    try {
+      // Cache-bust so a freshly committed data.json is picked up promptly.
+      const res = await fetch(DATA_URL + '?t=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const payload = await res.json();
+      const tuples = Array.isArray(payload) ? payload : payload.models;
+      if (!Array.isArray(tuples) || tuples.length === 0) throw new Error('no rows in data.json');
 
-    for (const makeUrl of CORS_PROXIES) {
-      try {
-        const res = await fetch(makeUrl(AA_URL));
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const html = await res.text();
-        const parsed = this.parseHTML(html);
-        if (parsed.length === 0) throw new Error('no rows parsed');
+      this.allData = this.mapTuples(tuples);
+      this.lastFetch = payload.updated ? new Date(payload.updated) : new Date();
 
-        this.allData = parsed;
-        this.lastFetch = new Date();
-        document.getElementById('last-updated').textContent =
-          '⏱ Last updated: ' + this.lastFetch.toLocaleTimeString() +
-          ' · ' + parsed.length + ' models loaded (live)';
-
-        const openCount = parsed.filter(d=>d.open).length;
-        this.setStatus('✅ ' + parsed.length + ' models · ' + openCount + ' open / ' + (parsed.length-openCount) + ' closed', 'ok');
-        this.draw();
-        return;
-      } catch(e) {
-        lastErr = e;
-        console.warn('Proxy failed:', makeUrl(AA_URL).split('?')[0], e.message);
-      }
+      const openCount = this.allData.filter(d => d.open).length;
+      const n = this.allData.length;
+      document.getElementById('last-updated').textContent =
+        '⏱ Data updated: ' + this.lastFetch.toLocaleString() +
+        ' · ' + n + ' models (auto-updated daily via GitHub Actions)';
+      this.setStatus('✅ ' + n + ' models · ' + openCount + ' open / ' + (n - openCount) + ' closed', 'ok');
+      this.draw();
+    } catch (e) {
+      // data.json missing/unreachable → keep the embedded snapshot.
+      console.error('Could not load data.json:', e);
+      if (this.allData.length === 0) this.loadSnapshot();
+      const n = this.allData.length;
+      document.getElementById('last-updated').textContent =
+        '⏱ Live data unavailable · showing embedded snapshot (' + n + ' models)';
+      this.setStatus('⚠️ Could not load data.json (' + e.message + ') — showing snapshot', 'err');
+      if (n > 0) this.draw();
     }
-
-    // All proxies failed — fall back to embedded snapshot or whatever we have.
-    console.error('All proxies failed:', lastErr);
-    if (this.allData.length === 0) this.loadSnapshot();
-    const n = this.allData.length;
-    document.getElementById('last-updated').textContent =
-      '⏱ Live fetch unavailable · showing embedded snapshot (' + n + ' models)';
-    this.setStatus('⚠️ Live fetch failed (' + (lastErr ? lastErr.message : 'unknown') + ') — showing snapshot', 'err');
-    if (n > 0) this.draw();
   },
 
   // ── Get display data (filtered + sorted + top N) ─────────────────────────

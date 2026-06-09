@@ -1,0 +1,50 @@
+name: Update leaderboard data
+
+# Security model:
+#  - Only GitHub's scheduler and a manual click can start this. No push /
+#    pull_request / repository_dispatch triggers, so nothing a website visitor
+#    does can ever run it.
+#  - The job has write access to repo contents ONLY (to commit data.json).
+#  - Third-party actions are pinned to a full commit SHA, not a moving tag.
+
+on:
+  schedule:
+    - cron: '17 5,17 * * *'   # twice daily (05:17 & 17:17 UTC); fixed, predictable cost
+  workflow_dispatch: {}        # manual run button (collaborators with write access only)
+
+# Least privilege: this token can commit files and nothing else.
+permissions:
+  contents: write
+
+# Never run two updates at once; cancel an in-progress run if a new one starts.
+concurrency:
+  group: update-leaderboard
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Scrape leaderboard into data.json
+        run: node scripts/scrape.mjs
+
+      - name: Commit data.json if it changed
+        run: |
+          if git diff --quiet -- data.json; then
+            echo "No changes to data.json."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data.json
+          git commit -m "data: refresh leaderboard ($(date -u +%Y-%m-%dT%H:%MZ))"
+          git push
