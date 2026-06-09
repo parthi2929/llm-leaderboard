@@ -72,6 +72,7 @@
       <span><span class="legend-dot" style="background:#f87171"></span>Closed / proprietary</span>
     </div>
     <button id="refresh-btn" onclick="app.refresh()">🔄 Refresh Data</button>
+    <button id="clear-btn" onclick="app.clearPins()">✖ Clear lines</button>
     <button id="export-btn" onclick="app.copyPNG()">📋 Copy as PNG</button>
   </div>
 
@@ -80,7 +81,7 @@
   </div>
 
   <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0 2px">
-    💡 <b style="color:#94a3b8">Drag</b> the crosshair and release to lock it where you let go, then <b style="color:#94a3b8">Copy as PNG</b> · press <b style="color:#94a3b8">Esc</b> to release
+    💡 <b style="color:#94a3b8">Click a column</b> to add a comparison line · click it again to remove it · add as many as you like, then <b style="color:#94a3b8">Copy as PNG</b> · <b style="color:#94a3b8">Esc</b> or <b style="color:#94a3b8">Clear lines</b> removes all
   </p>
 
   <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0">
@@ -209,9 +210,14 @@ const app = {
   hfCache: {},     // creator_lower → Promise<bool>
   lastFetch: null,
   rafPending: false,
-  lastIdx: -1,
-  pinnedIdx: -1,   // when ≥0 the crosshair is locked here and ignores the cursor
-  dragging: false, // true while the crosshair is being dragged/scrubbed
+  lastIdx: -1,     // model index under the cursor while hovering/scrubbing
+  hoverIdx: -1,    // model index for the transient hover preview line
+  pins: [],        // pinned model indices — each is a persistent comparison line
+  dragging: false, // true while a line is being dragged/scrubbed before drop
+
+  // Distinct colors cycled across comparison lines so each is identifiable.
+  LINE_COLORS: ['#ef4444','#22d3ee','#a3e635','#f472b6','#fb923c','#c084fc','#facc15','#2dd4bf'],
+  colorFor(order) { return this.LINE_COLORS[order % this.LINE_COLORS.length]; },
 
   // Layout constants (recomputed on draw)
   ML: 72, MR: 20, MT: 55, CH: 260, MB_IN: 6, GAP: 50, LBL_H: 145,
@@ -325,9 +331,18 @@ const app = {
     const data = this.getDisplayData();
     if (!data.length) return;
 
-    // Redrawing resizes (and clears) the overlay canvas, so release any locked crosshair.
-    this.pinnedIdx = -1;
+    // Redrawing resizes (and clears) the overlay canvas. Preserve comparison
+    // lines across re-renders (sort/filter/topN/refresh) by model identity, so
+    // they re-attach to the same models wherever those now sit (or drop out if
+    // a model is no longer visible).
+    const prevKeys = (this._layout && this.pins.length)
+      ? this.pins.map(i => this._layout.data[i]).filter(Boolean).map(d => d.model + '|' + d.creator)
+      : [];
+    this.pins = prevKeys
+      .map(key => data.findIndex(d => d.model + '|' + d.creator === key))
+      .filter(i => i >= 0);
     this.lastIdx = -1;
+    this.hoverIdx = -1;
     this.dragging = false;
 
     const { ML, MR, MT, CH, MB_IN, GAP, LBL_H, CW, TOTAL_H } = this;
@@ -431,6 +446,7 @@ const app = {
     this._layout.mxFn = mxFn;
     this._layout.cxFn = cxFn;
     this.bindHover();
+    this._render();   // repaint any comparison lines preserved across the redraw
   },
 
   // ── Hover / crosshair ─────────────────────────────────────────────────────
@@ -447,125 +463,143 @@ const app = {
   bindHover() {
     const hitEl = document.getElementById('hit');
 
-    // Press to grab the crosshair, drag to scrub, release to lock it in place.
+    // Press-drag-release to place a comparison line. Releasing on top of an
+    // existing line removes it, so the same gesture both adds and deletes.
     hitEl.onmousedown = (e) => {
       const idx = this._idxFromEvent(e);
       if (idx < 0) return;
       this.dragging = true;
-      this.pinnedIdx = -1;        // release any existing lock while grabbing
       this.lastIdx = idx;
-      this._renderHighlight(idx);
+      this._render();
       e.preventDefault();          // don't start a text/canvas selection
     };
 
     hitEl.onmousemove = (e) => {
-      if (this.dragging) {         // scrubbing — move the line with the cursor
-        const idx = this._idxFromEvent(e);
-        if (idx >= 0 && idx !== this.lastIdx) { this.lastIdx = idx; this._renderHighlight(idx); }
+      const idx = this._idxFromEvent(e);
+      if (this.dragging) {         // scrubbing — preview follows the cursor
+        if (idx >= 0 && idx !== this.lastIdx) { this.lastIdx = idx; this._render(); }
         return;
       }
-      if (this.pinnedIdx >= 0) return;   // locked — ignore the cursor
-      const idx = this._idxFromEvent(e);
-      if (idx < 0) { this._clearHover(); return; }
-      if (idx !== this.lastIdx) {
-        this.lastIdx = idx;
-        if (!this.rafPending) {
-          this.rafPending = true;
-          requestAnimationFrame(() => { this._renderHighlight(this.lastIdx); this.rafPending=false; });
-        }
+      if (idx === this.hoverIdx) return;
+      this.hoverIdx = idx;
+      if (!this.rafPending) {
+        this.rafPending = true;
+        requestAnimationFrame(() => { this._render(); this.rafPending = false; });
       }
     };
 
     hitEl.onmouseleave = () => {
-      if (this.dragging || this.pinnedIdx >= 0) return;  // keep line while dragging/locked
-      this._clearHover();
+      if (this.dragging) return;   // keep the preview while dragging
+      this.hoverIdx = -1;
+      this._render();
     };
   },
 
   // Called on mouseup anywhere (bound once in init) so releasing outside the
-  // chart still locks the crosshair at the last scrubbed position.
+  // chart still commits at the last scrubbed position. Toggles a line there.
   endDrag() {
     if (!this.dragging) return;
     this.dragging = false;
-    if (this.lastIdx < 0) return;
-    this.pinnedIdx = this.lastIdx;   // lock where you let go
-    this._renderHighlight(this.lastIdx);
-  },
-
-  unpin() {
-    this.pinnedIdx = -1;
-    this.dragging = false;
-    this._clearHover();
-  },
-
-  _clearHover() {
+    const idx = this.lastIdx;
     this.lastIdx = -1;
-    const h = document.getElementById('hit').getContext('2d');
-    h.clearRect(0, 0, this._layout?.CW||1260, this._layout?.TOTAL_H||900);
+    if (idx < 0) return;
+    const pos = this.pins.indexOf(idx);
+    if (pos >= 0) this.pins.splice(pos, 1);   // dropped on an existing line → remove
+    else this.pins.push(idx);                 // new column → add a comparison line
+    this._render();
   },
 
-  _renderHighlight(idx) {
+  clearPins() {
+    this.pins = [];
+    this.dragging = false;
+    this.hoverIdx = -1;
+    this.lastIdx = -1;
+    this._render();
+  },
+
+  // hex (#rrggbb) → rgba() string at the given alpha.
+  _rgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  },
+
+  // Repaint the overlay: every pinned line plus the transient hover/drag preview.
+  _render() {
     if (!this._layout) return;
-    const { data, maxP, maxI, c1Y, c2Y, CH, MB_IN, CW, TOTAL_H, ML, stepX, barW, mxFn, cxFn } = this._layout;
-    const hEl = document.getElementById('hit');
-    const h = hEl.getContext('2d');
+    const { CW, TOTAL_H } = this._layout;
+    const h = document.getElementById('hit').getContext('2d');
     h.clearRect(0, 0, CW, TOTAL_H);
+    this.pins.forEach((idx, order) => this._drawMarker(idx, this.colorFor(order), order, true));
+    const preview = this.dragging ? this.lastIdx : this.hoverIdx;
+    if (preview >= 0 && !this.pins.includes(preview)) {
+      this._drawMarker(preview, '#e2e8f0', this.pins.length, false);
+    }
+  },
+
+  // Draw one model's line: vertical rule through both charts, highlighted bars,
+  // dots with value chips, and (when pinned) a numbered badge plus an emphasized
+  // bottom axis label so each line is identified where the axis already names it.
+  _drawMarker(idx, color, order, pinned) {
+    const { data, maxP, maxI, c1Y, c2Y, CH, LBL_H, CW, barW, mxFn, cxFn } = this._layout;
+    const h = document.getElementById('hit').getContext('2d');
     if (idx < 0 || idx >= data.length) return;
 
     const d = data[idx];
-    const x  = cxFn(idx), bx = mxFn(idx);
+    const x = cxFn(idx), bx = mxFn(idx);
     const topY = c1Y, botY = c2Y + CH;
-    const bh1=(d.price/maxP)*CH, by1=c1Y+CH-bh1;
-    const bh2=(d.intel/maxI)*CH, by2=c2Y+CH-bh2;
+    const bh1 = (d.price / maxP) * CH, by1 = c1Y + CH - bh1;
+    const bh2 = (d.intel / maxI) * CH, by2 = c2Y + CH - bh2;
 
-    // Band
-    const bg = h.createLinearGradient(ML+idx*stepX,0,ML+(idx+1)*stepX,0);
-    bg.addColorStop(0,'rgba(239,68,68,0)');
-    bg.addColorStop(0.5,'rgba(239,68,68,0.07)');
-    bg.addColorStop(1,'rgba(239,68,68,0)');
-    h.fillStyle=bg; h.fillRect(ML+idx*stepX, topY, stepX, botY-topY);
+    h.globalAlpha = pinned ? 1 : 0.6;
 
-    // Red line
-    h.strokeStyle='#ef4444'; h.lineWidth=2; h.setLineDash([]);
-    h.beginPath(); h.moveTo(x,topY); h.lineTo(x,botY); h.stroke();
-
-    // Highlighted bars
-    h.fillStyle='rgba(251,146,60,0.28)'; h.strokeStyle='#fb923c'; h.lineWidth=2;
-    h.beginPath(); h.roundRect(bx-1,by1-1,barW+2,bh1+2,[4,4,0,0]); h.fill(); h.stroke();
-    h.fillStyle='rgba(129,140,248,0.28)'; h.strokeStyle='#a5b4fc'; h.lineWidth=2;
-    h.beginPath(); h.roundRect(bx-1,by2-1,barW+2,bh2+2,[4,4,0,0]); h.fill(); h.stroke();
-
-    // Dashed ref lines
-    h.lineWidth=1; h.setLineDash([4,4]);
-    h.strokeStyle='rgba(251,146,60,0.6)';
-    h.beginPath(); h.moveTo(ML,by1); h.lineTo(x,by1); h.stroke();
-    h.strokeStyle='rgba(129,140,248,0.6)';
-    h.beginPath(); h.moveTo(ML,by2); h.lineTo(x,by2); h.stroke();
+    // Vertical line — solid when pinned, dashed for the hover/drag preview.
+    h.strokeStyle = color; h.lineWidth = pinned ? 2 : 1.5;
+    h.setLineDash(pinned ? [] : [5, 4]);
+    h.beginPath(); h.moveTo(x, topY); h.lineTo(x, botY); h.stroke();
     h.setLineDash([]);
 
-    // Dots
-    [[x,by1,'#fb923c'],[x,by2,'#818cf8']].forEach(([dx,dy,dc])=>{
-      h.fillStyle=dc; h.beginPath(); h.arc(dx,dy,5,0,Math.PI*2); h.fill();
-      h.strokeStyle='#fff'; h.lineWidth=1.5; h.stroke();
+    // Highlighted bars in the line's color
+    h.fillStyle = this._rgba(color, 0.20); h.strokeStyle = color; h.lineWidth = 2;
+    h.beginPath(); h.roundRect(bx - 1, by1 - 1, barW + 2, bh1 + 2, [4, 4, 0, 0]); h.fill(); h.stroke();
+    h.beginPath(); h.roundRect(bx - 1, by2 - 1, barW + 2, bh2 + 2, [4, 4, 0, 0]); h.fill(); h.stroke();
+
+    // Dots at each bar top
+    [by1, by2].forEach(dy => {
+      h.fillStyle = color; h.beginPath(); h.arc(x, dy, 5, 0, Math.PI * 2); h.fill();
+      h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
     });
 
-    // Y labels
-    h.font='bold 11px Arial'; h.textAlign='right';
-    h.fillStyle='#fb923c'; h.fillText('$'+d.price.toFixed(2), ML-4, by1+4);
-    h.fillStyle='#818cf8'; h.fillText(d.intel, ML-4, by2+4);
+    // Value chips beside each dot (flip to the left edge near the right border).
+    const right = x < CW - 70;
+    h.font = 'bold 10px Arial'; h.textAlign = right ? 'left' : 'right';
+    const tx = right ? x + 9 : x - 9;
+    const chip = (txt, ty) => {
+      const w = h.measureText(txt).width;
+      h.fillStyle = 'rgba(15,23,42,0.85)';
+      h.beginPath(); h.roundRect(right ? tx - 2 : tx - w - 2, ty - 9, w + 4, 13, 3); h.fill();
+      h.fillStyle = color; h.fillText(txt, tx, ty + 1);
+    };
+    chip('$' + d.price.toFixed(2), by1 - 6);
+    chip(String(d.intel), by2 - 6);
 
-    // Caption pill in the gap between the two charts. Drawn on the canvas (not just
-    // the HTML tooltip) so the parked model is identified in the exported PNG.
-    const pinned = this.pinnedIdx === idx;
-    const cap = (pinned ? '📌 ' : '') +
-      `#${idx+1}  ${d.model}  ·  ${d.creator}  ·  $${d.price.toFixed(2)}/1M  ·  ${d.intel} AAII  ·  ${d.open?'OPEN':'CLOSED'}`;
-    h.font='bold 13px Segoe UI,Arial'; h.textAlign='center';
-    const cw = h.measureText(cap).width;
-    const cy = c1Y + CH + MB_IN + 22;   // inside the inter-chart gap, clear of bars/labels
-    h.fillStyle='rgba(15,23,42,0.95)';
-    h.beginPath(); h.roundRect(CW/2-cw/2-12, cy-15, cw+24, 24, 7); h.fill();
-    h.strokeStyle = d.open?'#4ade80':'#f87171'; h.lineWidth=1.5; h.stroke();
-    h.fillStyle='#f1f5f9'; h.fillText(cap, CW/2, cy+2);
+    h.globalAlpha = 1;
+    if (!pinned) return;
+
+    // Numbered badge at the top of the line
+    h.fillStyle = color; h.beginPath(); h.arc(x, topY - 2, 7, 0, Math.PI * 2); h.fill();
+    h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
+    h.fillStyle = '#0f172a'; h.font = 'bold 10px Arial'; h.textAlign = 'center';
+    h.fillText(String(order + 1), x, topY + 1.5);
+
+    // Emphasize this model's bottom axis label in the line's color.
+    h.save();
+    h.translate(x, botY + 12); h.rotate(-Math.PI / 2);
+    h.font = 'bold 11px Arial'; h.textAlign = 'right';
+    const lw = Math.min(h.measureText(d.model).width, LBL_H - 8);
+    h.fillStyle = this._rgba(color, 0.22);
+    h.beginPath(); h.roundRect(-(lw + 6), -8, lw + 12, 16, 4); h.fill();
+    h.fillStyle = color; h.fillText(d.model, 0, 3);
+    h.restore();
   },
 
   // ── Build the export image ────────────────────────────────────────────────
@@ -631,7 +665,7 @@ const app = {
     // Lock the crosshair when the mouse is released anywhere (even outside the chart)
     document.addEventListener('mouseup', () => this.endDrag());
     // Esc releases a locked crosshair
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.unpin(); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.clearPins(); });
 
     // Auto-refresh
     setInterval(() => this.refresh(), REFRESH_MS);
