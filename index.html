@@ -539,19 +539,19 @@ const app = {
     }
   },
 
-  // Draw one model's line: vertical rule through both charts, highlighted bars,
-  // dots with value chips, and (when pinned) a numbered badge plus an emphasized
-  // bottom axis label so each line is identified where the axis already names it.
+  // Draw one model's line: just a colored vertical rule through both charts,
+  // its two bars outlined, and a dot at each bar top. No text — the bars and the
+  // axis label underneath already carry the values and the name.
   _drawMarker(idx, color, order, pinned) {
-    const { data, maxP, maxI, c1Y, c2Y, CH, LBL_H, CW, barW, mxFn, cxFn } = this._layout;
+    const { data, maxP, maxI, c1Y, c2Y, CH, barW, mxFn, cxFn } = this._layout;
     const h = document.getElementById('hit').getContext('2d');
     if (idx < 0 || idx >= data.length) return;
 
     const d = data[idx];
     const x = cxFn(idx), bx = mxFn(idx);
     const topY = c1Y, botY = c2Y + CH;
-    const bh1 = (d.price / maxP) * CH, by1 = c1Y + CH - bh1;
-    const bh2 = (d.intel / maxI) * CH, by2 = c2Y + CH - bh2;
+    const by1 = c1Y + CH - (d.price / maxP) * CH;
+    const by2 = c2Y + CH - (d.intel / maxI) * CH;
 
     h.globalAlpha = pinned ? 1 : 0.6;
 
@@ -561,48 +561,18 @@ const app = {
     h.beginPath(); h.moveTo(x, topY); h.lineTo(x, botY); h.stroke();
     h.setLineDash([]);
 
-    // Highlighted bars in the line's color
-    h.fillStyle = this._rgba(color, 0.20); h.strokeStyle = color; h.lineWidth = 2;
-    h.beginPath(); h.roundRect(bx - 1, by1 - 1, barW + 2, bh1 + 2, [4, 4, 0, 0]); h.fill(); h.stroke();
-    h.beginPath(); h.roundRect(bx - 1, by2 - 1, barW + 2, bh2 + 2, [4, 4, 0, 0]); h.fill(); h.stroke();
+    // Outline the two bars in the line's color (no fill text).
+    h.strokeStyle = color; h.lineWidth = 2;
+    h.strokeRect(bx - 1, by1 - 1, barW + 2, (c1Y + CH) - by1 + 2);
+    h.strokeRect(bx - 1, by2 - 1, barW + 2, (c2Y + CH) - by2 + 2);
 
-    // Dots at each bar top
+    // Dot at each bar top.
     [by1, by2].forEach(dy => {
-      h.fillStyle = color; h.beginPath(); h.arc(x, dy, 5, 0, Math.PI * 2); h.fill();
+      h.fillStyle = color; h.beginPath(); h.arc(x, dy, 4, 0, Math.PI * 2); h.fill();
       h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
     });
 
-    // Value chips beside each dot (flip to the left edge near the right border).
-    const right = x < CW - 70;
-    h.font = 'bold 10px Arial'; h.textAlign = right ? 'left' : 'right';
-    const tx = right ? x + 9 : x - 9;
-    const chip = (txt, ty) => {
-      const w = h.measureText(txt).width;
-      h.fillStyle = 'rgba(15,23,42,0.85)';
-      h.beginPath(); h.roundRect(right ? tx - 2 : tx - w - 2, ty - 9, w + 4, 13, 3); h.fill();
-      h.fillStyle = color; h.fillText(txt, tx, ty + 1);
-    };
-    chip('$' + d.price.toFixed(2), by1 - 6);
-    chip(String(d.intel), by2 - 6);
-
     h.globalAlpha = 1;
-    if (!pinned) return;
-
-    // Numbered badge at the top of the line
-    h.fillStyle = color; h.beginPath(); h.arc(x, topY - 2, 7, 0, Math.PI * 2); h.fill();
-    h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
-    h.fillStyle = '#0f172a'; h.font = 'bold 10px Arial'; h.textAlign = 'center';
-    h.fillText(String(order + 1), x, topY + 1.5);
-
-    // Emphasize this model's bottom axis label in the line's color.
-    h.save();
-    h.translate(x, botY + 12); h.rotate(-Math.PI / 2);
-    h.font = 'bold 11px Arial'; h.textAlign = 'right';
-    const lw = Math.min(h.measureText(d.model).width, LBL_H - 8);
-    h.fillStyle = this._rgba(color, 0.22);
-    h.beginPath(); h.roundRect(-(lw + 6), -8, lw + 12, 16, 4); h.fill();
-    h.fillStyle = color; h.fillText(d.model, 0, 3);
-    h.restore();
   },
 
   // ── Build the export image ────────────────────────────────────────────────
