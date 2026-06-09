@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>LLM Leaderboard — Live Charts</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f172a;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;min-height:100vh}
+  #app{max-width:1320px;margin:0 auto;padding:8px 20px 20px}
+  header{text-align:center;padding:6px 0 4px}
+  header h1{font-size:16px;font-weight:700;color:#f1f5f9}
+  header p{font-size:11px;color:#64748b;margin-top:3px}
+  #status{text-align:center;font-size:12px;padding:6px 12px;border-radius:6px;margin:8px auto;display:inline-block}
+  #status.loading{background:#1e3a5f;color:#7dd3fc}
+  #status.ok{background:#14532d;color:#86efac}
+  #status.err{background:#450a0a;color:#fca5a5}
+  #controls{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;align-items:center;margin:10px 0 16px}
+  .ctrl-group{display:flex;align-items:center;gap:6px;background:#1e293b;border-radius:8px;padding:6px 12px}
+  .ctrl-group label{font-size:12px;color:#94a3b8}
+  select,input[type=range]{background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:5px;padding:3px 7px;font-size:12px}
+  .legend{display:flex;gap:16px;align-items:center;font-size:12px}
+  .legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px}
+  #refresh-btn{background:#1d4ed8;color:white;border:none;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
+  #refresh-btn:hover{background:#2563eb}
+  #export-btn{background:#047857;color:white;border:none;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
+  #export-btn:hover{background:#059669}
+  #chart-wrap{position:relative;width:100%}
+  canvas{display:block;width:100%}
+  #hit{position:absolute;top:0;left:0;width:100%;cursor:grab}
+  #hit:active{cursor:grabbing}
+  #last-updated{font-size:11px;color:#475569;text-align:center;margin-top:8px}
+  .badge-open{background:#14532d;color:#4ade80;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px}
+  .badge-closed{background:#450a0a;color:#f87171;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header><h1>🤖 LLM Leaderboard — Live Interactive Charts</h1></header>
+
+  <!-- Charts near the top so both are visible without scrolling past the chrome -->
+  <div id="chart-wrap">
+    <canvas id="base"></canvas>
+    <canvas id="hit"></canvas>
+  </div>
+
+  <!-- Toolbar + status + info all moved below the charts -->
+  <div id="controls">
+    <div class="ctrl-group">
+      <label>Top N models:</label>
+      <input type="range" id="topN" min="10" max="50" value="30" step="5" style="width:90px">
+      <span id="topNVal" style="font-size:12px;color:#f1f5f9;min-width:24px">30</span>
+    </div>
+    <div class="ctrl-group">
+      <label>Sort by:</label>
+      <select id="sortBy">
+        <option value="intel">Intelligence</option>
+        <option value="price">Price (low→high)</option>
+        <option value="priceDesc">Price (high→low)</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
+      <label>Filter:</label>
+      <select id="filterOpen">
+        <option value="all">All models</option>
+        <option value="open">Open only</option>
+        <option value="closed">Closed only</option>
+      </select>
+    </div>
+    <div class="legend">
+      <span><span class="legend-dot" style="background:#4ade80"></span>Open weights</span>
+      <span><span class="legend-dot" style="background:#f87171"></span>Closed / proprietary</span>
+    </div>
+    <button id="refresh-btn" onclick="app.refresh()">🔄 Refresh Data</button>
+    <button id="export-btn" onclick="app.copyPNG()">📋 Copy as PNG</button>
+  </div>
+
+  <div style="text-align:center;margin:4px 0">
+    <span id="status" class="loading">⏳ Loading...</span>
+  </div>
+
+  <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0 2px">
+    💡 <b style="color:#94a3b8">Drag</b> the crosshair and release to lock it where you let go, then <b style="color:#94a3b8">Copy as PNG</b> · press <b style="color:#94a3b8">Esc</b> to release
+  </p>
+
+  <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0">
+    Live data scraped from <a href="https://artificialanalysis.ai/leaderboards/models" target="_blank" style="color:#818cf8">artificialanalysis.ai</a> · Open/closed status via <a href="https://huggingface.co" target="_blank" style="color:#f59e0b">Hugging Face</a>
+  </p>
+
+  <div id="last-updated"></div>
+</div>
+
+<script>
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+// Public CORS proxies, tried in order. corsproxy.io's free tier no longer allows
+// server-side requests, so allorigins is the primary. Each entry is a function
+// that wraps the target URL.
+const CORS_PROXIES = [
+  url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+  url => 'https://thingproxy.freeboard.io/fetch/' + url,
+  url => 'https://corsproxy.io/?url=' + encodeURIComponent(url),
+];
+const AA_URL     = 'https://artificialanalysis.ai/leaderboards/models';
+const HF_API     = 'https://huggingface.co/api/models';
+const REFRESH_MS = 5 * 60 * 1000; // auto-refresh every 5 minutes
+
+// Embedded snapshot (top 60 by intelligence) used as a fallback so the charts
+// always render even when every live proxy is unreachable. Format: [model, creator, intel, price].
+const SNAPSHOT = [["Claude Opus 4.8 (max)","Anthropic",61,4.1],["GPT-5.5 (xhigh)","OpenAI",60,4.35],["GPT-5.5 (high)","OpenAI",59,4.35],["Claude Opus 4.7 (max)","Anthropic",57,4.1],["Gemini 3.1 Pro Preview","Google",57,1.74],["GPT-5.5 (medium)","OpenAI",57,4.35],["Qwen3.7 Max","Alibaba",57,1.43],["Gemini 3.5 Flash","Google",55,1.31],["Gemini 3.5 Flash (medium)","Google",55,1.31],["MiniMax-M3","MiniMax",55,0.22],["Kimi K2.6","Kimi",54,0.7],["MiMo-V2.5-Pro","Xiaomi",54,0.18],["GPT-5.3 Codex (xhigh)","OpenAI",54,1.87],["Qwen3.7 Plus","Alibaba",53,0.25],["Grok 4.3 (high)","xAI",53,0.64],["Claude Opus 4.7 (Non-reasoning, high)","Anthropic",52,4.1],["Claude Sonnet 4.6 (max)","Anthropic",52,2.46],["DeepSeek V4 Pro (Max)","DeepSeek",52,0.18],["GLM-5.1","Z AI",51,0.9],["GPT-5.5 (low)","OpenAI",51,4.35],["Qwen3.6 Plus","Alibaba",50,0.43],["DeepSeek V4 Pro (High)","DeepSeek",50,0.18],["MiniMax-M2.7","MiniMax",50,0.22],["MiMo-V2.5","Xiaomi",49,0.06],["GPT-5.4 mini (xhigh)","OpenAI",49,0.65],["Grok 4.3 (medium)","xAI",49,0.64],["Nemotron 3 Ultra","NVIDIA",48,0.52],["DeepSeek V4 Flash (Max)","DeepSeek",47,0.06],["DeepSeek V4 Flash (High)","DeepSeek",46,0.08],["Qwen3.6 27B","Alibaba",46,0.9],["Qwen3.5 397B A17B","Alibaba",45,0.9],["MiMo-V2-Omni-0327","Xiaomi",45,0.34],["Claude Sonnet 4.6 (Non-reasoning)","Anthropic",44,2.46],["GPT-5.4 nano (xhigh)","OpenAI",44,0.18],["GLM-5.1","Z AI",44,0.9],["Qwen3.6 35B A3B","Alibaba",43,0.37],["MiMo-V2-Omni","Xiaomi",43,0],["Gemini 3.5 Flash (minimal)","Google",43,1.31],["Kimi K2.6","Kimi",43,0.7],["Claude Sonnet 4.6 (Non-reasoning, Low Effort)","Anthropic",43,2.46],["Step 3.7 Flash","StepFun",43,0.18],["Hy3-preview","Tencent",42,0.1],["GPT-5.5 Instant (May 2026)","OpenAI",42,4.35],["Qwen3.5 122B A10B","Alibaba",42,0.68],["MiMo-V2-Flash (Feb 2026)","Xiaomi",41,0.06],["GPT-5.5 (Non-reasoning)","OpenAI",41,4.35],["Qwen3.5 397B A17B","Alibaba",40,0.9],["DeepSeek V4 Pro","DeepSeek",39,0.18],["Mistral Medium 3.5","Mistral",39,2.1],["Gemma 4 31B","Google",39,0],["Qwen3.5 Omni Plus","Alibaba",39,0.84],["Step 3.5 Flash 2603","StepFun",38,0.06],["Ring-2.6-1T","InclusionAI",38,0.52],["o3","OpenAI",38,1.55],["GPT-5.4 nano","OpenAI",38,0.18],["GPT-5.4 mini (medium)","OpenAI",38,0.65],["Command A+","Cohere",37,0],["Qwen3.6 27B","Alibaba",37,0.9],["Claude 4.5 Haiku","Anthropic",37,0.82],["DeepSeek V4 Flash","DeepSeek",36,0.06]];
+
+// HF model search strings per known creator → maps to HF org slug for lookup
+// Used to confirm open-weights status via HF API
+const HF_ORG_MAP = {
+  'alibaba': 'Qwen',
+  'deepseek': 'deepseek-ai',
+  'xiaomi': 'XiaomiMiMo',
+  'minimax': 'MiniMaxAI',
+  'kimi': 'moonshotai',
+  'nvidia': 'nvidia',
+  'zhipu': 'THUDM',
+  'z ai': 'THUDM',
+  'meta': 'meta-llama',
+  'mistral': 'mistralai',
+  'google': null,      // Google models are closed (Gemini); open ones are explicit
+  'openai': null,      // closed
+  'anthropic': null,   // closed
+  'xai': null,         // closed
+  'cohere': null,      // closed
+  'amazon': null,      // closed
+};
+
+// Definitive known-open creator names (case-insensitive match)
+// These are orgs that release model weights publicly
+const KNOWN_OPEN_CREATORS = new Set([
+  'alibaba','deepseek','xiaomi','minimax','kimi','nvidia','meta',
+  'mistral','ibm','lg ai research','perplexity','upstage','liquid ai',
+  'prime intellect','inclusionai','stepfun','tencent','baidu',
+  'openai-open', // gpt-oss models have open weights
+  'zhipu','z ai','korea telecom','arcee ai','motif technologies',
+  'swiss ai initiative','reka ai','cohere-open','sarvam',
+]);
+
+// Definitive known-closed creators
+const KNOWN_CLOSED_CREATORS = new Set([
+  'openai','anthropic','google','xai','amazon','cohere','ai21 labs',
+  'minimax-closed','longcat',
+]);
+
+// Overrides for specific model names (exact match after lowercase)
+// Used when creator alone is ambiguous
+const MODEL_OVERRIDES = {
+  // MiniMax has open-weight models
+  'minimax-m3': true,
+  'minimax-m2.7': true,
+  // GLM is open (THUDM)
+  'glm-5.1': true,
+  // gpt-oss models are open
+  'gpt-oss-120b (high)': true,
+  'gpt-oss-120b (low)': true,
+  'gpt-oss-20b (high)': true,
+  'gpt-oss-20b (low)': true,
+  // Gemma is open (Google open-source)
+  'gemma 4 31b': true,
+  'gemma 4 26b a4b': true,
+  'gemma 4 e4b': true,
+  'gemma 4 e2b': true,
+  'gemma 3 270m': true,
+  // Llama variants
+  'llama 4 scout': true,
+  'llama 4 maverick': true,
+  'llama 3.3 70b': true,
+  'llama 3.1 405b': true,
+  'llama 3.2 90b (vision)': true,
+  'llama 3.2 11b (vision)': true,
+  // Command A is closed, but Cohere has some open
+  'command a': false,
+  'command a+': false,
+  // Granite is open (IBM)
+  'granite 4.1 30b': true,
+  'granite 4.1 8b': true,
+  'granite 4.1 3b': true,
+  'granite 4.0 h small': true,
+  'granite 4.0 micro': true,
+  'granite 4.0 350m': true,
+  'granite 4.0 1b': true,
+  'granite 4.0 h 1b': true,
+  'granite 4.0 h 350m': true,
+  // Phi is open (Microsoft)
+  'phi-4': true,
+  'phi-4 multimodal': true,
+  'phi-4 mini': true,
+  // Devstral is open (Mistral)
+  'devstral 2': true,
+  'devstral small 2': true,
+  // Nova is closed (Amazon)
+  'nova premier': false,
+  'nova 2.0 pro preview': false,
+  'nova 2.0 lite': false,
+  'nova micro': false,
+  // Qwen all open
+  'qwen3.7 max': true,
+  'qwen3.7 plus': true,
+  // Grok closed
+  'grok 4.3 (high)': false,
+  'grok 4.3 (medium)': false,
+  'grok 4.3 (non-reasoning)': false,
+};
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+const app = {
+  allData: [],
+  openCache: {},   // model_name_lower → true/false
+  hfCache: {},     // creator_lower → Promise<bool>
+  lastFetch: null,
+  rafPending: false,
+  lastIdx: -1,
+  pinnedIdx: -1,   // when ≥0 the crosshair is locked here and ignores the cursor
+  dragging: false, // true while the crosshair is being dragged/scrubbed
+
+  // Layout constants (recomputed on draw)
+  ML: 72, MR: 20, MT: 55, CH: 260, MB_IN: 6, GAP: 50, LBL_H: 145,
+  CW: 1260,
+
+  get TOTAL_H() {
+    return this.MT + this.CH + this.MB_IN + this.GAP + this.MT + this.CH + this.LBL_H + 20;
+  },
+
+  setStatus(msg, type) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = type;
+  },
+
+  // ── Determine if a model is open weights ─────────────────────────────────
+  isOpen(modelName, creatorName) {
+    const ml = modelName.toLowerCase();
+    const cl = creatorName.toLowerCase().trim();
+
+    // 1. Direct model override
+    for (const [k, v] of Object.entries(MODEL_OVERRIDES)) {
+      if (ml.startsWith(k) || ml === k) return v;
+    }
+
+    // 2. Known closed creator
+    if (KNOWN_CLOSED_CREATORS.has(cl)) return false;
+
+    // 3. Known open creator
+    if (KNOWN_OPEN_CREATORS.has(cl)) return true;
+
+    // 4. Partial creator match
+    for (const oc of KNOWN_OPEN_CREATORS) {
+      if (cl.includes(oc) || oc.includes(cl)) return true;
+    }
+    for (const cc of KNOWN_CLOSED_CREATORS) {
+      if (cl.includes(cc) || cc.includes(cl)) return false;
+    }
+
+    // 5. Default unknown → treat as closed (conservative)
+    return false;
+  },
+
+  // ── Parse the leaderboard HTML into model records ─────────────────────────
+  parseHTML(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const rows = [...doc.querySelectorAll('table tr')];
+    const parsed = [];
+    rows.slice(1).forEach(row => {
+      const cells = [...row.querySelectorAll('td')];
+      if (cells.length < 5) return;
+      // Columns: 0=Model, 1=Context, 2=Creator, 3=Intelligence, 4=Blended price
+      const model   = (cells[0]?.textContent || '').trim().split('\n')[0];
+      const creator = (cells[2]?.textContent || '').trim().split('\n')[0];
+      const intel   = parseFloat((cells[3]?.textContent || '').trim());
+      const price   = parseFloat((cells[4]?.textContent || '').trim().replace(/[$,]/g,''));
+      if (model && !isNaN(intel) && !isNaN(price) && price >= 0) {
+        parsed.push({
+          model: model.replace(/\s+/g,' ').trim(),
+          creator: (creator || 'Unknown').trim(),
+          intel,
+          price,
+          open: this.isOpen(model, creator || '')
+        });
+      }
+    });
+    return parsed;
+  },
+
+  // ── Load the embedded snapshot as a fallback ──────────────────────────────
+  loadSnapshot() {
+    this.allData = SNAPSHOT.map(([model, creator, intel, price]) => ({
+      model, creator, intel, price, open: this.isOpen(model, creator)
+    }));
+    this.draw();
+  },
+
+  // ── Fetch and parse leaderboard via CORS proxy, with fallbacks ────────────
+  async fetchData() {
+    this.setStatus('⏳ Fetching live leaderboard…', 'loading');
+    let lastErr = null;
+
+    for (const makeUrl of CORS_PROXIES) {
+      try {
+        const res = await fetch(makeUrl(AA_URL));
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const html = await res.text();
+        const parsed = this.parseHTML(html);
+        if (parsed.length === 0) throw new Error('no rows parsed');
+
+        this.allData = parsed;
+        this.lastFetch = new Date();
+        document.getElementById('last-updated').textContent =
+          '⏱ Last updated: ' + this.lastFetch.toLocaleTimeString() +
+          ' · ' + parsed.length + ' models loaded (live)';
+
+        const openCount = parsed.filter(d=>d.open).length;
+        this.setStatus('✅ ' + parsed.length + ' models · ' + openCount + ' open / ' + (parsed.length-openCount) + ' closed', 'ok');
+        this.draw();
+        return;
+      } catch(e) {
+        lastErr = e;
+        console.warn('Proxy failed:', makeUrl(AA_URL).split('?')[0], e.message);
+      }
+    }
+
+    // All proxies failed — fall back to embedded snapshot or whatever we have.
+    console.error('All proxies failed:', lastErr);
+    if (this.allData.length === 0) this.loadSnapshot();
+    const n = this.allData.length;
+    document.getElementById('last-updated').textContent =
+      '⏱ Live fetch unavailable · showing embedded snapshot (' + n + ' models)';
+    this.setStatus('⚠️ Live fetch failed (' + (lastErr ? lastErr.message : 'unknown') + ') — showing snapshot', 'err');
+    if (n > 0) this.draw();
+  },
+
+  // ── Get display data (filtered + sorted + top N) ─────────────────────────
+  getDisplayData() {
+    const topN    = parseInt(document.getElementById('topN').value);
+    const sortBy  = document.getElementById('sortBy').value;
+    const filterO = document.getElementById('filterOpen').value;
+
+    let data = [...this.allData];
+    if (filterO === 'open')   data = data.filter(d => d.open);
+    if (filterO === 'closed') data = data.filter(d => !d.open);
+
+    // Sort
+    if (sortBy === 'intel')     data.sort((a,b) => b.intel - a.intel);
+    if (sortBy === 'price')     data.sort((a,b) => a.price - b.price);
+    if (sortBy === 'priceDesc') data.sort((a,b) => b.price - a.price);
+
+    return data.slice(0, topN);
+  },
+
+  // ── Draw charts ───────────────────────────────────────────────────────────
+  draw() {
+    const data = this.getDisplayData();
+    if (!data.length) return;
+
+    // Redrawing resizes (and clears) the overlay canvas, so release any locked crosshair.
+    this.pinnedIdx = -1;
+    this.lastIdx = -1;
+    this.dragging = false;
+
+    const { ML, MR, MT, CH, MB_IN, GAP, LBL_H, CW, TOTAL_H } = this;
+    const N = data.length;
+    const stepX = (CW - ML - MR) / N;
+    const barW  = stepX * 0.68;
+    const c1Y   = MT;
+    const c2Y   = MT + CH + MB_IN + GAP + MT;
+
+    const maxP = Math.max(...data.map(d=>d.price)) * 1.12;
+    const maxI = Math.max(...data.map(d=>d.intel)) * 1.08;
+
+    this._layout = { data, N, stepX, barW, c1Y, c2Y, maxP, maxI, CW, TOTAL_H, ML, MR, MT, CH, GAP, MB_IN, LBL_H };
+
+    // Resize canvases
+    const base = document.getElementById('base');
+    const hit  = document.getElementById('hit');
+    base.width = CW; base.height = TOTAL_H;
+    hit.width  = CW; hit.height  = TOTAL_H;
+
+    const b = base.getContext('2d');
+    b.fillStyle = '#0f172a';
+    b.fillRect(0, 0, CW, TOTAL_H);
+
+    // Title + legend
+    b.fillStyle = '#f1f5f9'; b.font = 'bold 15px Segoe UI,Arial'; b.textAlign = 'center';
+    b.fillText('LLM Leaderboard — Live Data from artificialanalysis.ai', CW/2, 22);
+    const lgX = CW/2 - 140;
+    b.fillStyle = '#4ade80'; b.beginPath(); b.arc(lgX, 37, 5, 0, Math.PI*2); b.fill();
+    b.fillStyle = '#4ade80'; b.font = '11px Arial'; b.textAlign = 'left';
+    b.fillText('Open weights', lgX+9, 41);
+    b.fillStyle = '#f87171'; b.beginPath(); b.arc(lgX+105, 37, 5, 0, Math.PI*2); b.fill();
+    b.fillStyle = '#f87171'; b.fillText('Closed / proprietary', lgX+114, 41);
+    b.fillStyle = '#475569'; b.textAlign = 'right';
+    b.fillText('Open/closed via Hugging Face taxonomy', CW-MR, 41);
+
+    const mxFn = i => ML + i*stepX + (stepX-barW)/2;
+    const cxFn = i => ML + i*stepX + stepX/2;
+
+    const drawChart = (yOff, vals, maxV, title, yLbl, ct, cb2, fmtFn, xlabels) => {
+      const yBot = yOff + CH;
+      b.fillStyle = '#1e293b';
+      b.beginPath();
+      b.roundRect(6, yOff-MT+8, CW-12, MT+CH+(xlabels ? LBL_H+10 : MB_IN+6), 12);
+      b.fill();
+      b.fillStyle = '#f1f5f9'; b.font = 'bold 13px Segoe UI,Arial'; b.textAlign = 'center';
+      b.fillText(title, CW/2, yOff-MT+30);
+      for (let g=0; g<=5; g++) {
+        const gy = yBot-(g/5)*CH, val = maxV*g/5;
+        b.strokeStyle='rgba(148,163,184,0.1)'; b.lineWidth=1;
+        b.beginPath(); b.moveTo(ML,gy); b.lineTo(CW-MR,gy); b.stroke();
+        b.fillStyle='#64748b'; b.font='11px Arial'; b.textAlign='right';
+        b.fillText(fmtFn(val), ML-7, gy+4);
+      }
+      b.save(); b.translate(15,yOff+CH/2); b.rotate(-Math.PI/2);
+      b.fillStyle='#94a3b8'; b.font='12px Arial'; b.textAlign='center';
+      b.fillText(yLbl,0,0); b.restore();
+      b.strokeStyle='#334155'; b.lineWidth=1.5;
+      b.beginPath(); b.moveTo(ML,yOff); b.lineTo(ML,yBot); b.lineTo(CW-MR,yBot); b.stroke();
+      vals.forEach((v,i) => {
+        const bh=(v/maxV)*CH, bx=mxFn(i), by=yBot-bh;
+        const g=b.createLinearGradient(bx,by,bx,by+bh);
+        g.addColorStop(0,ct); g.addColorStop(1,cb2);
+        b.fillStyle=g; b.beginPath(); b.roundRect(bx,by,barW,bh,[3,3,0,0]); b.fill();
+        b.fillStyle='#e2e8f0'; b.font='bold 9px Arial'; b.textAlign='center';
+        b.fillText(fmtFn(v), bx+barW/2, Math.max(by-3,yOff+11));
+        b.strokeStyle='#334155'; b.lineWidth=1;
+        b.beginPath(); b.moveTo(cxFn(i),yBot); b.lineTo(cxFn(i),yBot+4); b.stroke();
+      });
+      if (xlabels) {
+        vals.forEach((_,i) => {
+          const isOpen = data[i].open;
+          b.fillStyle = isOpen ? '#4ade80' : '#f87171';
+          b.beginPath(); b.arc(cxFn(i), yBot+5, 3, 0, Math.PI*2); b.fill();
+          b.save();
+          b.translate(cxFn(i), yBot+12); b.rotate(-Math.PI/2);
+          b.fillStyle = isOpen ? '#4ade80' : '#f87171';
+          b.font = (isOpen?'bold ':'') + '11px Arial';
+          b.textAlign='right';
+          b.fillText(data[i].model, 0, 0);
+          b.restore();
+        });
+      }
+    };
+
+    // Connectors
+    for (let i=0; i<N; i++) {
+      const x = cxFn(i);
+      b.strokeStyle='rgba(51,65,85,0.4)'; b.setLineDash([2,5]); b.lineWidth=1;
+      b.beginPath(); b.moveTo(x,c1Y+CH+MB_IN); b.lineTo(x,c2Y); b.stroke();
+      b.setLineDash([]);
+    }
+
+    drawChart(c1Y, data.map(d=>d.price), maxP,
+      'Chart 1 · Blended Price (USD / 1M Tokens)', 'USD / 1M Tokens',
+      '#fb923c','#7c2d12', v=>'$'+v.toFixed(2), false);
+    drawChart(c2Y, data.map(d=>d.intel), maxI,
+      'Chart 2 · Artificial Analysis Intelligence Index (AAII)', 'Intelligence Score',
+      '#818cf8','#312e81', v=>Math.round(v)+'', true);
+
+    this._layout.mxFn = mxFn;
+    this._layout.cxFn = cxFn;
+    this.bindHover();
+  },
+
+  // ── Hover / crosshair ─────────────────────────────────────────────────────
+  // Map a mouse event to a model index, or -1 if outside the plot area.
+  _idxFromEvent(e) {
+    if (!this._layout) return -1;
+    const { CW, ML, MR, N, stepX } = this._layout;
+    const r = document.getElementById('hit').getBoundingClientRect();
+    const cx = (e.clientX - r.left) / (r.width / CW);
+    if (cx < ML || cx > CW-MR) return -1;
+    return Math.max(0, Math.min(N-1, Math.floor((cx-ML)/stepX)));
+  },
+
+  bindHover() {
+    const hitEl = document.getElementById('hit');
+
+    // Press to grab the crosshair, drag to scrub, release to lock it in place.
+    hitEl.onmousedown = (e) => {
+      const idx = this._idxFromEvent(e);
+      if (idx < 0) return;
+      this.dragging = true;
+      this.pinnedIdx = -1;        // release any existing lock while grabbing
+      this.lastIdx = idx;
+      this._renderHighlight(idx);
+      e.preventDefault();          // don't start a text/canvas selection
+    };
+
+    hitEl.onmousemove = (e) => {
+      if (this.dragging) {         // scrubbing — move the line with the cursor
+        const idx = this._idxFromEvent(e);
+        if (idx >= 0 && idx !== this.lastIdx) { this.lastIdx = idx; this._renderHighlight(idx); }
+        return;
+      }
+      if (this.pinnedIdx >= 0) return;   // locked — ignore the cursor
+      const idx = this._idxFromEvent(e);
+      if (idx < 0) { this._clearHover(); return; }
+      if (idx !== this.lastIdx) {
+        this.lastIdx = idx;
+        if (!this.rafPending) {
+          this.rafPending = true;
+          requestAnimationFrame(() => { this._renderHighlight(this.lastIdx); this.rafPending=false; });
+        }
+      }
+    };
+
+    hitEl.onmouseleave = () => {
+      if (this.dragging || this.pinnedIdx >= 0) return;  // keep line while dragging/locked
+      this._clearHover();
+    };
+  },
+
+  // Called on mouseup anywhere (bound once in init) so releasing outside the
+  // chart still locks the crosshair at the last scrubbed position.
+  endDrag() {
+    if (!this.dragging) return;
+    this.dragging = false;
+    if (this.lastIdx < 0) return;
+    this.pinnedIdx = this.lastIdx;   // lock where you let go
+    this._renderHighlight(this.lastIdx);
+  },
+
+  unpin() {
+    this.pinnedIdx = -1;
+    this.dragging = false;
+    this._clearHover();
+  },
+
+  _clearHover() {
+    this.lastIdx = -1;
+    const h = document.getElementById('hit').getContext('2d');
+    h.clearRect(0, 0, this._layout?.CW||1260, this._layout?.TOTAL_H||900);
+  },
+
+  _renderHighlight(idx) {
+    if (!this._layout) return;
+    const { data, maxP, maxI, c1Y, c2Y, CH, MB_IN, CW, TOTAL_H, ML, stepX, barW, mxFn, cxFn } = this._layout;
+    const hEl = document.getElementById('hit');
+    const h = hEl.getContext('2d');
+    h.clearRect(0, 0, CW, TOTAL_H);
+    if (idx < 0 || idx >= data.length) return;
+
+    const d = data[idx];
+    const x  = cxFn(idx), bx = mxFn(idx);
+    const topY = c1Y, botY = c2Y + CH;
+    const bh1=(d.price/maxP)*CH, by1=c1Y+CH-bh1;
+    const bh2=(d.intel/maxI)*CH, by2=c2Y+CH-bh2;
+
+    // Band
+    const bg = h.createLinearGradient(ML+idx*stepX,0,ML+(idx+1)*stepX,0);
+    bg.addColorStop(0,'rgba(239,68,68,0)');
+    bg.addColorStop(0.5,'rgba(239,68,68,0.07)');
+    bg.addColorStop(1,'rgba(239,68,68,0)');
+    h.fillStyle=bg; h.fillRect(ML+idx*stepX, topY, stepX, botY-topY);
+
+    // Red line
+    h.strokeStyle='#ef4444'; h.lineWidth=2; h.setLineDash([]);
+    h.beginPath(); h.moveTo(x,topY); h.lineTo(x,botY); h.stroke();
+
+    // Highlighted bars
+    h.fillStyle='rgba(251,146,60,0.28)'; h.strokeStyle='#fb923c'; h.lineWidth=2;
+    h.beginPath(); h.roundRect(bx-1,by1-1,barW+2,bh1+2,[4,4,0,0]); h.fill(); h.stroke();
+    h.fillStyle='rgba(129,140,248,0.28)'; h.strokeStyle='#a5b4fc'; h.lineWidth=2;
+    h.beginPath(); h.roundRect(bx-1,by2-1,barW+2,bh2+2,[4,4,0,0]); h.fill(); h.stroke();
+
+    // Dashed ref lines
+    h.lineWidth=1; h.setLineDash([4,4]);
+    h.strokeStyle='rgba(251,146,60,0.6)';
+    h.beginPath(); h.moveTo(ML,by1); h.lineTo(x,by1); h.stroke();
+    h.strokeStyle='rgba(129,140,248,0.6)';
+    h.beginPath(); h.moveTo(ML,by2); h.lineTo(x,by2); h.stroke();
+    h.setLineDash([]);
+
+    // Dots
+    [[x,by1,'#fb923c'],[x,by2,'#818cf8']].forEach(([dx,dy,dc])=>{
+      h.fillStyle=dc; h.beginPath(); h.arc(dx,dy,5,0,Math.PI*2); h.fill();
+      h.strokeStyle='#fff'; h.lineWidth=1.5; h.stroke();
+    });
+
+    // Y labels
+    h.font='bold 11px Arial'; h.textAlign='right';
+    h.fillStyle='#fb923c'; h.fillText('$'+d.price.toFixed(2), ML-4, by1+4);
+    h.fillStyle='#818cf8'; h.fillText(d.intel, ML-4, by2+4);
+
+    // Caption pill in the gap between the two charts. Drawn on the canvas (not just
+    // the HTML tooltip) so the parked model is identified in the exported PNG.
+    const pinned = this.pinnedIdx === idx;
+    const cap = (pinned ? '📌 ' : '') +
+      `#${idx+1}  ${d.model}  ·  ${d.creator}  ·  $${d.price.toFixed(2)}/1M  ·  ${d.intel} AAII  ·  ${d.open?'OPEN':'CLOSED'}`;
+    h.font='bold 13px Segoe UI,Arial'; h.textAlign='center';
+    const cw = h.measureText(cap).width;
+    const cy = c1Y + CH + MB_IN + 22;   // inside the inter-chart gap, clear of bars/labels
+    h.fillStyle='rgba(15,23,42,0.95)';
+    h.beginPath(); h.roundRect(CW/2-cw/2-12, cy-15, cw+24, 24, 7); h.fill();
+    h.strokeStyle = d.open?'#4ade80':'#f87171'; h.lineWidth=1.5; h.stroke();
+    h.fillStyle='#f1f5f9'; h.fillText(cap, CW/2, cy+2);
+  },
+
+  // ── Build the export image ────────────────────────────────────────────────
+  // Composite the base chart with the overlay (locked crosshair + caption) so the
+  // highlight is included in the output.
+  _composite() {
+    const base = document.getElementById('base');
+    const hit  = document.getElementById('hit');
+    const out = document.createElement('canvas');
+    out.width = base.width; out.height = base.height;
+    const ctx = out.getContext('2d');
+    ctx.drawImage(base, 0, 0);
+    ctx.drawImage(hit, 0, 0);
+    return out;
+  },
+
+  _btnFlash(msg) {
+    const btn = document.getElementById('export-btn');
+    if (btn._reset) clearTimeout(btn._reset);
+    if (!btn._orig) btn._orig = btn.textContent;
+    btn.textContent = msg;
+    btn._reset = setTimeout(() => { btn.textContent = btn._orig; btn._orig = null; }, 1800);
+  },
+
+  // ── Copy chart to clipboard as PNG (falls back to download if blocked) ─────
+  async copyPNG() {
+    const out = this._composite();
+    try {
+      // Passing a Promise<Blob> to ClipboardItem preserves the click's user-activation.
+      const item = new ClipboardItem({
+        'image/png': new Promise(res => out.toBlob(res, 'image/png'))
+      });
+      await navigator.clipboard.write([item]);
+      this._btnFlash('✅ Copied!');
+    } catch (e) {
+      console.warn('Clipboard copy failed, downloading instead:', e);
+      out.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'llm-leaderboard-' + new Date().toISOString().slice(0,10) + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }, 'image/png');
+      this._btnFlash('⬇ Saved (clipboard blocked)');
+    }
+  },
+
+  // ── Refresh ───────────────────────────────────────────────────────────────
+  async refresh() {
+    await this.fetchData();
+  },
+
+  // ── Init ──────────────────────────────────────────────────────────────────
+  init() {
+    // Control listeners
+    document.getElementById('topN').addEventListener('input', e => {
+      document.getElementById('topNVal').textContent = e.target.value;
+      this.draw();
+    });
+    document.getElementById('sortBy').addEventListener('change', () => this.draw());
+    document.getElementById('filterOpen').addEventListener('change', () => this.draw());
+
+    // Lock the crosshair when the mouse is released anywhere (even outside the chart)
+    document.addEventListener('mouseup', () => this.endDrag());
+    // Esc releases a locked crosshair
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.unpin(); });
+
+    // Auto-refresh
+    setInterval(() => this.refresh(), REFRESH_MS);
+
+    // Render the embedded snapshot immediately so the charts are never blank,
+    // then attempt a live fetch to replace it.
+    this.loadSnapshot();
+    this.fetchData();
+  }
+};
+
+app.init();
+</script>
+</body>
+</html>
