@@ -65,9 +65,15 @@ function parse(html) {
     const model = (cells[COL.model] || '').split('\n')[0].trim();
     const creator = (cells[COL.creator] || '').split('\n')[0].trim() || 'Unknown';
     const intel = parseFloat(cells[COL.intel]);
-    const price = parseFloat((cells[COL.price] || '').replace(/[$,]/g, ''));
+    const rawPrice = parseFloat((cells[COL.price] || '').replace(/[$,]/g, ''));
+    // AA prints "--" in Price until it prices a newly listed model, which can
+    // lag the listing by days. Carry that as null and keep the model, so the
+    // intelligence chart is complete; the page decides whether to show it.
+    const price = isNaN(rawPrice) || rawPrice < 0 ? null : rawPrice;
 
-    if (!model || isNaN(intel) || isNaN(price) || price < 0) continue;
+    // Intelligence is the only hard requirement — a row with no AAII score has
+    // nothing to plot on either chart.
+    if (!model || isNaN(intel)) continue;
     const key = model + '|' + creator;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -79,7 +85,8 @@ function parse(html) {
 async function main() {
   const html = await fetchPage(SOURCE);
   const parsed = parse(html);
-  console.log(`Parsed ${parsed.length} models.`);
+  const unpriced = parsed.filter((m) => m[3] === null).length;
+  console.log(`Parsed ${parsed.length} models (${unpriced} with no published price).`);
 
   if (parsed.length < MIN_ROWS) {
     console.error(
@@ -102,7 +109,7 @@ async function main() {
       source: SOURCE,
       updated: new Date().toISOString(),
       count: models.length,
-      // [model, creator, intelligenceIndex, blendedUsdPer1M, openWeights]
+      // [model, creator, intelligenceIndex, blendedUsdPer1M|null, openWeights]
       models,
     };
     const json = JSON.stringify(payload, null, 0) + '\n';

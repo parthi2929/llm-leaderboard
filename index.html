@@ -67,6 +67,13 @@
         <option value="closed">Closed only</option>
       </select>
     </div>
+    <div class="ctrl-group">
+      <label for="includeNoPrice" style="cursor:pointer">
+        <input type="checkbox" id="includeNoPrice" style="vertical-align:-2px;margin-right:4px">
+        Include models with no price
+      </label>
+      <span id="noPriceCount" style="font-size:11px;color:#64748b"></span>
+    </div>
     <div class="legend">
       <span><span class="legend-dot" style="background:#4ade80"></span>Open weights</span>
       <span><span class="legend-dot" style="background:#f87171"></span>Closed / proprietary</span>
@@ -267,8 +274,10 @@ const app = {
   // as a 5th element (resolved server-side via curated lists + Hugging Face); the
   // embedded snapshot has 4 elements, so fall back to the local heuristic there.
   mapTuples(tuples) {
+    // price is null when Artificial Analysis has not published one yet.
     return tuples.map(([model, creator, intel, price, open]) => ({
-      model, creator, intel, price,
+      model, creator, intel,
+      price: typeof price === 'number' ? price : null,
       open: typeof open === 'boolean' ? open : this.isOpen(model, creator)
     }));
   },
@@ -295,9 +304,13 @@ const app = {
 
       const openCount = this.allData.filter(d => d.open).length;
       const n = this.allData.length;
+      const noPrice = this.allData.filter(d => d.price === null).length;
+      document.getElementById('noPriceCount').textContent =
+        noPrice ? '(' + noPrice + ' unpriced)' : '';
       document.getElementById('last-updated').textContent =
         '⏱ Data updated: ' + this.lastFetch.toLocaleString() + ' · ' + n + ' models';
-      this.setStatus('✅ ' + n + ' models · ' + openCount + ' open / ' + (n - openCount) + ' closed', 'ok');
+      this.setStatus('✅ ' + n + ' models · ' + openCount + ' open / ' + (n - openCount) + ' closed' +
+        (noPrice ? ' · ' + noPrice + ' without a published price' : ''), 'ok');
       this.draw();
     } catch (e) {
       // data.json missing/unreachable → keep the embedded snapshot.
@@ -316,15 +329,24 @@ const app = {
     const topN    = parseInt(document.getElementById('topN').value);
     const sortBy  = document.getElementById('sortBy').value;
     const filterO = document.getElementById('filterOpen').value;
+    const withNoPrice = document.getElementById('includeNoPrice').checked;
 
     let data = [...this.allData];
+    if (!withNoPrice) data = data.filter(d => d.price !== null);
     if (filterO === 'open')   data = data.filter(d => d.open);
     if (filterO === 'closed') data = data.filter(d => !d.open);
 
-    // Sort
+    // Sort. Price-less models have no rank on a price axis, so they always go
+    // last on both price sorts instead of colliding at zero.
+    const byPrice = (a, b, dir) => {
+      if (a.price === null && b.price === null) return b.intel - a.intel;
+      if (a.price === null) return 1;
+      if (b.price === null) return -1;
+      return dir * (a.price - b.price);
+    };
     if (sortBy === 'intel')     data.sort((a,b) => b.intel - a.intel);
-    if (sortBy === 'price')     data.sort((a,b) => a.price - b.price);
-    if (sortBy === 'priceDesc') data.sort((a,b) => b.price - a.price);
+    if (sortBy === 'price')     data.sort((a,b) => byPrice(a, b,  1));
+    if (sortBy === 'priceDesc') data.sort((a,b) => byPrice(a, b, -1));
 
     return data.slice(0, topN);
   },
@@ -355,7 +377,9 @@ const app = {
     const c1Y   = MT;
     const c2Y   = MT + CH + MB_IN + GAP + MT;
 
-    const maxP = Math.max(...data.map(d=>d.price)) * 1.12;
+    // Scale the price axis on real prices only; null prices draw as zero-height.
+    const priced = data.map(d=>d.price).filter(p => p !== null);
+    const maxP = (priced.length ? Math.max(...priced) : 1) * 1.12;
     const maxI = Math.max(...data.map(d=>d.intel)) * 1.08;
 
     this._layout = { data, N, stepX, barW, c1Y, c2Y, maxP, maxI, CW, TOTAL_H, ML, MR, MT, CH, GAP, MB_IN, LBL_H };
@@ -406,12 +430,17 @@ const app = {
       b.strokeStyle='#334155'; b.lineWidth=1.5;
       b.beginPath(); b.moveTo(ML,yOff); b.lineTo(ML,yBot); b.lineTo(CW-MR,yBot); b.stroke();
       vals.forEach((v,i) => {
-        const bh=(v/maxV)*CH, bx=mxFn(i), by=yBot-bh;
-        const g=b.createLinearGradient(bx,by,bx,by+bh);
-        g.addColorStop(0,ct); g.addColorStop(1,cb2);
-        b.fillStyle=g; b.beginPath(); b.roundRect(bx,by,barW,bh,[3,3,0,0]); b.fill();
-        b.fillStyle='#e2e8f0'; b.font='bold 9px Arial'; b.textAlign='center';
-        b.fillText(fmtFn(v), bx+barW/2, Math.max(by-3,yOff+11));
+        // A null value (no published price) is a zero-height bar labelled n/a,
+        // which stays distinct from a real $0.00 bar.
+        const na = v === null;
+        const bh=na ? 0 : (v/maxV)*CH, bx=mxFn(i), by=yBot-bh;
+        if (!na) {
+          const g=b.createLinearGradient(bx,by,bx,by+bh);
+          g.addColorStop(0,ct); g.addColorStop(1,cb2);
+          b.fillStyle=g; b.beginPath(); b.roundRect(bx,by,barW,bh,[3,3,0,0]); b.fill();
+        }
+        b.fillStyle=na ? '#64748b' : '#e2e8f0'; b.font='bold 9px Arial'; b.textAlign='center';
+        b.fillText(na ? 'n/a' : fmtFn(v), bx+barW/2, Math.max(by-3,yOff+11));
         b.strokeStyle='#334155'; b.lineWidth=1;
         b.beginPath(); b.moveTo(cxFn(i),yBot); b.lineTo(cxFn(i),yBot+4); b.stroke();
       });
@@ -550,7 +579,7 @@ const app = {
     const d = data[idx];
     const x = cxFn(idx), bx = mxFn(idx);
     const topY = c1Y, botY = c2Y + CH;
-    const by1 = c1Y + CH - (d.price / maxP) * CH;
+    const by1 = c1Y + CH - (d.price === null ? 0 : (d.price / maxP) * CH);
     const by2 = c2Y + CH - (d.intel / maxI) * CH;
 
     h.globalAlpha = pinned ? 1 : 0.6;
@@ -639,6 +668,7 @@ const app = {
     });
     document.getElementById('sortBy').addEventListener('change', () => this.draw());
     document.getElementById('filterOpen').addEventListener('change', () => this.draw());
+    document.getElementById('includeNoPrice').addEventListener('change', () => this.draw());
 
     // Lock the crosshair when the mouse is released anywhere (even outside the chart)
     document.addEventListener('mouseup', () => this.endDrag());
