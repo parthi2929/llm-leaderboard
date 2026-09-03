@@ -1,11 +1,19 @@
 // Open-weights classification for the leaderboard scraper.
 //
 // Strategy (in order of confidence):
+//   0. Artificial Analysis itself — the leaderboard page ships a per-model
+//      isOpenWeights flag (see openweights.mjs). Per-model and authoritative,
+//      so it settles every model it covers.
 //   1. Per-model overrides — exact/prefix matches for known exceptions.
 //   2. Curated creator lists — established orgs we already know are open/closed.
 //   3. Hugging Face verification — for creators NOT covered above, ask HF whether
 //      that creator publishes public model weights. This is where new/unknown
 //      creators get resolved instead of being blindly defaulted.
+//
+// Tiers 1-3 are the fallback for anything AA's payload does not carry. They work
+// at CREATOR granularity, which is why they cannot be the primary source: Meta,
+// Google, Cohere and AI21 each ship both open and closed models, so a creator
+// rule is guaranteed to mislabel one side of their line-up.
 //
 // HF is used ONLY for the unknown bucket on purpose: the curated lists are
 // authoritative for established creators, and we don't want a transient HF
@@ -104,12 +112,23 @@ async function hfOrgHasWeights(slug, fetchImpl) {
 
 // Resolve open/closed for every model. Returns models as
 // [model, creator, intel, price, open] and a small classification report.
-export async function classifyModels(models, { fetchImpl = fetch } = {}) {
+//
+// `authoritative` is the Map from extractOpenWeights(). Pass an empty Map (or
+// omit it) to fall back entirely to the curated lists, which is what happens if
+// AA changes their build and the payload can no longer be read.
+export async function classifyModels(models, { fetchImpl = fetch, authoritative = new Map() } = {}) {
   const creatorCache = new Map(); // creator(lower) → boolean (HF result)
-  const report = { override: 0, knownOpen: 0, knownClosed: 0, hfOpen: 0, hfClosedOrUnknown: 0 };
+  const report = { aa: 0, override: 0, knownOpen: 0, knownClosed: 0, hfOpen: 0, hfClosedOrUnknown: 0 };
   const out = [];
 
   for (const [model, creator, intel, price] of models) {
+    const aa = authoritative.get(model);
+    if (aa) {
+      report.aa++;
+      out.push([model, creator, intel, price, aa.open]);
+      continue;
+    }
+
     const h = heuristic(model, creator);
     let open;
     if (h) {

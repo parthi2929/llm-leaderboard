@@ -10,6 +10,7 @@
 
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { classifyModels } from './classify.mjs';
+import { extractOpenWeights } from './openweights.mjs';
 
 const SOURCE = 'https://artificialanalysis.ai/leaderboards/models';
 const OUT = new URL('../data.json', import.meta.url);
@@ -96,12 +97,27 @@ async function main() {
     process.exit(2);
   }
 
-  // Resolve open/closed (curated lists + Hugging Face for unknown creators).
-  const { models, report } = await classifyModels(parsed);
+  // AA ships a per-model isOpenWeights flag in the page. Read it and let it
+  // settle every model it covers; the curated lists handle the rest.
+  const authoritative = extractOpenWeights(html);
+  const covered = parsed.filter((m) => authoritative.has(m[0])).length;
   console.log(
-    `Classified: ${report.override} override, ${report.knownOpen} known-open, ` +
-      `${report.knownClosed} known-closed, ${report.hfOpen} HF-open, ` +
-      `${report.hfClosedOrUnknown} HF-closed/unknown.`
+    `Open-weights payload: ${authoritative.recordCount || 0} records, ` +
+      `covering ${covered}/${parsed.length} scraped models.`
+  );
+  if (!authoritative.size) {
+    console.warn(
+      'WARNING: no open-weights payload found — AA may have changed their build. ' +
+        'Falling back to the curated creator lists for every model.'
+    );
+  }
+
+  // Resolve open/closed (AA payload, then curated lists + Hugging Face).
+  const { models, report } = await classifyModels(parsed, { authoritative });
+  console.log(
+    `Classified: ${report.aa} from AA, ${report.override} override, ` +
+      `${report.knownOpen} known-open, ${report.knownClosed} known-closed, ` +
+      `${report.hfOpen} HF-open, ${report.hfClosedOrUnknown} HF-closed/unknown.`
   );
 
   {
