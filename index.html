@@ -68,6 +68,12 @@
       </select>
     </div>
     <div class="ctrl-group">
+      <label>Company:</label>
+      <select id="filterCreator">
+        <option value="all">All companies</option>
+      </select>
+    </div>
+    <div class="ctrl-group">
       <label for="includeNoPrice" style="cursor:pointer">
         <input type="checkbox" id="includeNoPrice" style="vertical-align:-2px;margin-right:4px">
         Include models with no price
@@ -282,9 +288,27 @@ const app = {
     }));
   },
 
+  // ── Rebuild the Company filter options from the loaded data ───────────────
+  // Runs whenever a new dataset lands (snapshot or data.json). Shows per-company
+  // model counts and preserves the current selection when the company still exists.
+  populateCreatorFilter() {
+    const sel = document.getElementById('filterCreator');
+    const prev = sel.value || 'all';
+    const counts = new Map();
+    for (const d of this.allData) counts.set(d.creator, (counts.get(d.creator) || 0) + 1);
+    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const creators = [...counts.keys()].sort((a, b) => a.localeCompare(b));
+    sel.innerHTML = '<option value="all">All companies</option>' +
+      creators.map(c =>
+        `<option value="${esc(c)}">${esc(c)} (${counts.get(c)})</option>`
+      ).join('');
+    sel.value = (prev === 'all' || creators.includes(prev)) ? prev : 'all';
+  },
+
   // ── Load the embedded snapshot as a fallback ──────────────────────────────
   loadSnapshot() {
     this.allData = this.mapTuples(SNAPSHOT);
+    this.populateCreatorFilter();
     this.draw();
   },
 
@@ -300,6 +324,7 @@ const app = {
       if (!Array.isArray(tuples) || tuples.length === 0) throw new Error('no rows in data.json');
 
       this.allData = this.mapTuples(tuples);
+      this.populateCreatorFilter();
       this.lastFetch = payload.updated ? new Date(payload.updated) : new Date();
 
       const openCount = this.allData.filter(d => d.open).length;
@@ -329,12 +354,14 @@ const app = {
     const topN    = parseInt(document.getElementById('topN').value);
     const sortBy  = document.getElementById('sortBy').value;
     const filterO = document.getElementById('filterOpen').value;
+    const creatorF = document.getElementById('filterCreator').value;
     const withNoPrice = document.getElementById('includeNoPrice').checked;
 
     let data = [...this.allData];
     if (!withNoPrice) data = data.filter(d => d.price !== null);
     if (filterO === 'open')   data = data.filter(d => d.open);
     if (filterO === 'closed') data = data.filter(d => !d.open);
+    if (creatorF !== 'all')   data = data.filter(d => d.creator === creatorF);
 
     // Sort. Price-less models have no rank on a price axis, so they always go
     // last on both price sorts instead of colliding at zero.
@@ -668,6 +695,7 @@ const app = {
     });
     document.getElementById('sortBy').addEventListener('change', () => this.draw());
     document.getElementById('filterOpen').addEventListener('change', () => this.draw());
+    document.getElementById('filterCreator').addEventListener('change', () => this.draw());
     document.getElementById('includeNoPrice').addEventListener('change', () => this.draw());
 
     // Lock the crosshair when the mouse is released anywhere (even outside the chart)
