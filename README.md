@@ -45,7 +45,18 @@ the Action or consume any quota:
 | `data.json` | Scraped leaderboard data, committed by the Action. |
 | `scripts/scrape.mjs` | Server-side scraper (Node 22, no dependencies). |
 | `scripts/classify.mjs` | Open/closed classification (curated lists + Hugging Face). |
+| `scripts/serve.mjs` | Zero-dependency static server for local preview. |
 | `.github/workflows/update-leaderboard.yml` | Scheduled updater. |
+
+## Preview the page locally
+
+Opening `index.html` straight from disk (file://) can't fetch `./data.json` —
+browsers block `fetch()` from file origins — so you'd only see the embedded
+snapshot. Serve it over HTTP instead:
+
+```bash
+node scripts/serve.mjs   # → http://localhost:8080
+```
 
 ## Run the scraper locally
 
