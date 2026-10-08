@@ -7,102 +7,111 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0f172a;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;min-height:100vh}
-  #app{max-width:1320px;margin:0 auto;padding:8px 20px 20px}
-  header{text-align:center;padding:6px 0 4px}
-  header h1{font-size:16px;font-weight:700;color:#f1f5f9}
-  header p{font-size:11px;color:#64748b;margin-top:3px}
-  #status{text-align:center;font-size:12px;padding:6px 12px;border-radius:6px;margin:8px auto;display:inline-block}
+  #app{display:flex;gap:12px;align-items:flex-start;max-width:1700px;margin:0 auto;padding:8px 12px 16px}
+  #main{flex:1;min-width:0}
+  #sidebar{flex:0 0 210px;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow-y:auto;
+           background:#1e293b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:12px}
+  #sidebar.collapsed{flex-basis:38px;padding:10px 6px}
+  #sidebar.collapsed .sb-body,#sidebar.collapsed .sb-title{display:none}
+  .sb-head{display:flex;align-items:center;justify-content:space-between}
+  .sb-title{font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em}
+  #sb-toggle{background:none;border:none;color:#94a3b8;cursor:pointer;font-size:16px;line-height:1;padding:2px 4px}
+  #sb-toggle:hover{color:#f1f5f9}
+  .sb-body{display:flex;flex-direction:column;gap:12px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field>label{font-size:11px;color:#94a3b8}
+  .row{display:flex;align-items:center;gap:8px}
+  select{width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:12px}
+  input[type=range]{flex:1;min-width:0}
+  .check{font-size:12px;color:#cbd5e1;cursor:pointer;display:flex;align-items:center;gap:6px}
+  .btn{width:100%;color:white;border:none;padding:6px 10px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
+  #refresh-btn{background:#1d4ed8} #refresh-btn:hover{background:#2563eb}
+  #clear-btn{background:#334155} #clear-btn:hover{background:#475569}
+  #export-btn{background:#047857} #export-btn:hover{background:#059669}
+  .info{font-size:11px;color:#64748b;line-height:1.5}
+  .info a{color:#818cf8}
+  #status{font-size:11px;padding:5px 8px;border-radius:6px}
   #status.loading{background:#1e3a5f;color:#7dd3fc}
   #status.ok{background:#14532d;color:#86efac}
   #status.err{background:#450a0a;color:#fca5a5}
-  #controls{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;align-items:center;margin:10px 0 16px}
-  .ctrl-group{display:flex;align-items:center;gap:6px;background:#1e293b;border-radius:8px;padding:6px 12px}
-  .ctrl-group label{font-size:12px;color:#94a3b8}
-  select,input[type=range]{background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:5px;padding:3px 7px;font-size:12px}
-  .legend{display:flex;gap:16px;align-items:center;font-size:12px}
-  .legend-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px}
-  #refresh-btn{background:#1d4ed8;color:white;border:none;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
-  #refresh-btn:hover{background:#2563eb}
-  #export-btn{background:#047857;color:white;border:none;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
-  #export-btn:hover{background:#059669}
   #chart-wrap{position:relative;width:100%}
   canvas{display:block;width:100%}
   #hit{position:absolute;top:0;left:0;width:100%;cursor:grab}
   #hit:active{cursor:grabbing}
-  #last-updated{font-size:11px;color:#475569;text-align:center;margin-top:8px}
-  .badge-open{background:#14532d;color:#4ade80;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px}
-  .badge-closed{background:#450a0a;color:#f87171;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px}
+  @media (max-width:700px){
+    #app{flex-direction:column}
+    #sidebar{position:static;flex-basis:auto;width:100%;max-height:none}
+  }
 </style>
 </head>
 <body>
 <div id="app">
-  <header><h1>🤖 LLM Leaderboard — Live Interactive Charts</h1></header>
-
-  <!-- Charts near the top so both are visible without scrolling past the chrome -->
-  <div id="chart-wrap">
-    <canvas id="base"></canvas>
-    <canvas id="hit"></canvas>
-  </div>
-
-  <!-- Toolbar + status + info all moved below the charts -->
-  <div id="controls">
-    <div class="ctrl-group">
-      <label>Top N models:</label>
-      <input type="range" id="topN" min="10" max="50" value="30" step="5" style="width:90px">
-      <span id="topNVal" style="font-size:12px;color:#f1f5f9;min-width:24px">30</span>
+  <aside id="sidebar">
+    <div class="sb-head">
+      <span class="sb-title">Controls</span>
+      <button id="sb-toggle" title="Collapse / expand" onclick="app.toggleSidebar()">◀</button>
     </div>
-    <div class="ctrl-group">
-      <label>Sort by:</label>
-      <select id="sortBy">
-        <option value="intel">Intelligence</option>
-        <option value="price">Price (low→high)</option>
-        <option value="priceDesc">Price (high→low)</option>
-      </select>
-    </div>
-    <div class="ctrl-group">
-      <label>Filter:</label>
-      <select id="filterOpen">
-        <option value="all">All models</option>
-        <option value="open">Open only</option>
-        <option value="closed">Closed only</option>
-      </select>
-    </div>
-    <div class="ctrl-group">
-      <label>Company:</label>
-      <select id="filterCreator">
-        <option value="all">All companies</option>
-      </select>
-    </div>
-    <div class="ctrl-group">
-      <label for="includeNoPrice" style="cursor:pointer">
-        <input type="checkbox" id="includeNoPrice" style="vertical-align:-2px;margin-right:4px">
-        Include models with no price
+    <div class="sb-body">
+      <div class="field">
+        <label for="orient">Orientation</label>
+        <select id="orient">
+          <option value="vertical">Vertical</option>
+          <option value="horizontal">Horizontal</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="topN">Top N</label>
+        <div class="row">
+          <input type="range" id="topN" min="10" max="50" value="30" step="5">
+          <span id="topNVal" style="font-size:12px;min-width:20px">30</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="sortBy">Sort</label>
+        <select id="sortBy">
+          <option value="intel">Intelligence</option>
+          <option value="price">Price ↑</option>
+          <option value="priceDesc">Price ↓</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="filterOpen">Weights</label>
+        <select id="filterOpen">
+          <option value="all">All</option>
+          <option value="open">Open</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="filterCreator">Company</label>
+        <select id="filterCreator">
+          <option value="all">All</option>
+        </select>
+      </div>
+      <label class="check" for="includeNoPrice">
+        <input type="checkbox" id="includeNoPrice">
+        Unpriced <span id="noPriceCount" style="color:#64748b"></span>
       </label>
-      <span id="noPriceCount" style="font-size:11px;color:#64748b"></span>
+      <button class="btn" id="refresh-btn" onclick="app.refresh()">Refresh</button>
+      <button class="btn" id="clear-btn" onclick="app.clearPins()">Clear lines</button>
+      <button class="btn" id="export-btn" onclick="app.copyPNG()">Copy PNG</button>
+      <div id="status" class="loading">Loading…</div>
+      <div class="info">
+        Click a model to add or remove a line. Esc clears all.<br>
+        Data: <a href="https://artificialanalysis.ai/leaderboards/models" target="_blank">artificialanalysis.ai</a><br>
+        Open/closed: <a href="https://huggingface.co" target="_blank">Hugging Face</a><br>
+        <span id="last-updated"></span><br>
+        <span id="build">__BUILD_SHA__</span>
+      </div>
     </div>
-    <div class="legend">
-      <span><span class="legend-dot" style="background:#4ade80"></span>Open weights</span>
-      <span><span class="legend-dot" style="background:#f87171"></span>Closed / proprietary</span>
+  </aside>
+
+  <main id="main">
+    <div id="chart-wrap">
+      <canvas id="base"></canvas>
+      <canvas id="hit"></canvas>
     </div>
-    <button id="refresh-btn" onclick="app.refresh()">🔄 Refresh Data</button>
-    <button id="clear-btn" onclick="app.clearPins()">✖ Clear lines</button>
-    <button id="export-btn" onclick="app.copyPNG()">📋 Copy as PNG</button>
-  </div>
-
-  <div style="text-align:center;margin:4px 0">
-    <span id="status" class="loading">⏳ Loading...</span>
-  </div>
-
-  <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0 2px">
-    💡 <b style="color:#94a3b8">Click a column</b> to add a comparison line · click it again to remove it · add as many as you like, then <b style="color:#94a3b8">Copy as PNG</b> · <b style="color:#94a3b8">Esc</b> or <b style="color:#94a3b8">Clear lines</b> removes all
-  </p>
-
-  <p style="text-align:center;font-size:11px;color:#64748b;margin:4px 0">
-    Live data scraped from <a href="https://artificialanalysis.ai/leaderboards/models" target="_blank" style="color:#818cf8">artificialanalysis.ai</a> · Open/closed status via <a href="https://huggingface.co" target="_blank" style="color:#f59e0b">Hugging Face</a>
-  </p>
-
-  <div id="last-updated"></div>
-  <div id="build" style="text-align:center;font-size:10px;color:#475569;margin:3px 0 0">__BUILD_SHA__</div>
+  </main>
 </div>
 
 <script>
@@ -233,13 +242,17 @@ const app = {
   LINE_COLORS: ['#ef4444','#22d3ee','#a3e635','#f472b6','#fb923c','#c084fc','#facc15','#2dd4bf'],
   colorFor(order) { return this.LINE_COLORS[order % this.LINE_COLORS.length]; },
 
+  // Label highlight for a selected model. The background is a light color with
+  // the highest contrast against a dark shade of the label's own hue: yellow
+  // behind dark red (closed), light magenta behind dark green (open).
+  LABEL_HI: {
+    open:   { bg: '#f5d0fe', fg: '#14532d' },
+    closed: { bg: '#fde047', fg: '#991b1b' },
+  },
+
   // Layout constants (recomputed on draw)
   ML: 72, MR: 20, MT: 55, CH: 260, MB_IN: 6, GAP: 50, LBL_H: 145,
   CW: 1260,
-
-  get TOTAL_H() {
-    return this.MT + this.CH + this.MB_IN + this.GAP + this.MT + this.CH + this.LBL_H + 20;
-  },
 
   setStatus(msg, type) {
     const el = document.getElementById('status');
@@ -293,12 +306,12 @@ const app = {
   // model counts and preserves the current selection when the company still exists.
   populateCreatorFilter() {
     const sel = document.getElementById('filterCreator');
-    const prev = sel.value || 'all';
+    const prev = this.prefs.filterCreator || sel.value || 'all';
     const counts = new Map();
     for (const d of this.allData) counts.set(d.creator, (counts.get(d.creator) || 0) + 1);
     const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const creators = [...counts.keys()].sort((a, b) => a.localeCompare(b));
-    sel.innerHTML = '<option value="all">All companies</option>' +
+    sel.innerHTML = '<option value="all">All</option>' +
       creators.map(c =>
         `<option value="${esc(c)}">${esc(c)} (${counts.get(c)})</option>`
       ).join('');
@@ -314,7 +327,7 @@ const app = {
 
   // ── Load leaderboard from the committed data.json (same origin) ────────────
   async fetchData() {
-    this.setStatus('⏳ Loading leaderboard…', 'loading');
+    this.setStatus('Loading…', 'loading');
     try {
       // Cache-bust so a freshly committed data.json is picked up promptly.
       const res = await fetch(DATA_URL + '?t=' + Date.now(), { cache: 'no-store' });
@@ -331,11 +344,10 @@ const app = {
       const n = this.allData.length;
       const noPrice = this.allData.filter(d => d.price === null).length;
       document.getElementById('noPriceCount').textContent =
-        noPrice ? '(' + noPrice + ' unpriced)' : '';
+        noPrice ? '(' + noPrice + ')' : '';
       document.getElementById('last-updated').textContent =
-        '⏱ Data updated: ' + this.lastFetch.toLocaleString() + ' · ' + n + ' models';
-      this.setStatus('✅ ' + n + ' models · ' + openCount + ' open / ' + (n - openCount) + ' closed' +
-        (noPrice ? ' · ' + noPrice + ' without a published price' : ''), 'ok');
+        'Updated ' + this.lastFetch.toLocaleString();
+      this.setStatus(n + ' models · ' + openCount + ' open · ' + (n - openCount) + ' closed', 'ok');
       this.draw();
     } catch (e) {
       // data.json missing/unreachable → keep the embedded snapshot.
@@ -343,8 +355,8 @@ const app = {
       if (this.allData.length === 0) this.loadSnapshot();
       const n = this.allData.length;
       document.getElementById('last-updated').textContent =
-        '⏱ Live data unavailable · showing embedded snapshot (' + n + ' models)';
-      this.setStatus('⚠️ Could not load data.json (' + e.message + ') — showing snapshot', 'err');
+        'Snapshot (' + n + ' models)';
+      this.setStatus('data.json failed (' + e.message + ')', 'err');
       if (n > 0) this.draw();
     }
   },
@@ -397,31 +409,32 @@ const app = {
     this.hoverIdx = -1;
     this.dragging = false;
 
-    const { ML, MR, MT, CH, MB_IN, GAP, LBL_H, CW, TOTAL_H } = this;
-    const N = data.length;
-    const stepX = (CW - ML - MR) / N;
-    const barW  = stepX * 0.68;
-    const c1Y   = MT;
-    const c2Y   = MT + CH + MB_IN + GAP + MT;
-
     // Scale the price axis on real prices only; null prices draw as zero-height.
     const priced = data.map(d=>d.price).filter(p => p !== null);
     const maxP = (priced.length ? Math.max(...priced) : 1) * 1.12;
     const maxI = Math.max(...data.map(d=>d.intel)) * 1.08;
 
-    this._layout = { data, N, stepX, barW, c1Y, c2Y, maxP, maxI, CW, TOTAL_H, ML, MR, MT, CH, GAP, MB_IN, LBL_H };
+    if (document.getElementById('orient').value === 'vertical') this._drawVertical(data, maxP, maxI);
+    else this._drawHorizontal(data, maxP, maxI);
 
-    // Resize canvases
+    this.bindHover();
+    this._render();   // repaint any comparison lines preserved across the redraw
+  },
+
+  // Resize both canvases to the layout and return the cleared base context.
+  _resetCanvases(CW, TOTAL_H) {
     const base = document.getElementById('base');
     const hit  = document.getElementById('hit');
     base.width = CW; base.height = TOTAL_H;
     hit.width  = CW; hit.height  = TOTAL_H;
-
     const b = base.getContext('2d');
     b.fillStyle = '#0f172a';
     b.fillRect(0, 0, CW, TOTAL_H);
+    return b;
+  },
 
-    // Title + legend
+  // Page title + open/closed legend across the top of the canvas.
+  _drawHeader(b, CW, MR) {
     b.fillStyle = '#f1f5f9'; b.font = 'bold 15px Segoe UI,Arial'; b.textAlign = 'center';
     b.fillText('LLM Leaderboard — Live Data from artificialanalysis.ai', CW/2, 22);
     const lgX = CW/2 - 140;
@@ -432,9 +445,31 @@ const app = {
     b.fillStyle = '#f87171'; b.fillText('Closed / proprietary', lgX+114, 41);
     b.fillStyle = '#475569'; b.textAlign = 'right';
     b.fillText('Open/closed via Hugging Face taxonomy', CW-MR, 41);
+  },
+
+  // ── Horizontal: models as columns, price chart above intelligence chart ──
+  _drawHorizontal(data, maxP, maxI) {
+    const { ML, MR, MT, CH, MB_IN, GAP, CW } = this;
+    const N = data.length;
+
+    // The rotated-label band is as tall as the longest model name (capped).
+    const m = document.getElementById('base').getContext('2d');
+    m.font = 'bold 11px Arial';
+    const LBL_H = Math.max(this.LBL_H, Math.min(340, Math.max(...data.map(d => m.measureText(d.model).width))) + 24);
+    const TOTAL_H = MT + CH + MB_IN + GAP + MT + CH + LBL_H + 20;
+    const stepX = (CW - ML - MR) / N;
+    const barW  = stepX * 0.68;
+    const c1Y   = MT;
+    const c2Y   = MT + CH + MB_IN + GAP + MT;
 
     const mxFn = i => ML + i*stepX + (stepX-barW)/2;
     const cxFn = i => ML + i*stepX + stepX/2;
+
+    this._layout = { orient: 'horizontal', data, N, stepX, barW, c1Y, c2Y, maxP, maxI, CW, TOTAL_H,
+                     ML, MR, MT, CH, GAP, MB_IN, LBL_H, mxFn, cxFn };
+
+    const b = this._resetCanvases(CW, TOTAL_H);
+    this._drawHeader(b, CW, MR);
 
     const drawChart = (yOff, vals, maxV, title, yLbl, ct, cb2, fmtFn, xlabels) => {
       const yBot = yOff + CH;
@@ -476,13 +511,7 @@ const app = {
           const isOpen = data[i].open;
           b.fillStyle = isOpen ? '#4ade80' : '#f87171';
           b.beginPath(); b.arc(cxFn(i), yBot+5, 3, 0, Math.PI*2); b.fill();
-          b.save();
-          b.translate(cxFn(i), yBot+12); b.rotate(-Math.PI/2);
-          b.fillStyle = isOpen ? '#4ade80' : '#f87171';
-          b.font = (isOpen?'bold ':'') + '11px Arial';
-          b.textAlign='right';
-          b.fillText(data[i].model, 0, 0);
-          b.restore();
+          this._drawLabel(b, i, null);
         });
       }
     };
@@ -501,19 +530,121 @@ const app = {
     drawChart(c2Y, data.map(d=>d.intel), maxI,
       'Chart 2 · Artificial Analysis Intelligence Index (AAII)', 'Intelligence Score',
       '#818cf8','#312e81', v=>Math.round(v)+'', true);
+  },
 
-    this._layout.mxFn = mxFn;
-    this._layout.cxFn = cxFn;
-    this.bindHover();
-    this._render();   // repaint any comparison lines preserved across the redraw
+  // ── Vertical: models as rows, intelligence chart left, price chart right ──
+  _drawVertical(data, maxP, maxI) {
+    const { CW, MR } = this;
+    const N = data.length;
+    const HDR = 55, PT = 40, ROW = 22, AX = 48;   // header, panel title band, row height, axis band
+    const barH = ROW * 0.68;
+
+    // The model-name column is as wide as the longest name (capped).
+    const m = document.getElementById('base').getContext('2d');
+    m.font = 'bold 11px Arial';
+    const labW = Math.min(340, Math.max(...data.map(d => m.measureText(d.model).width)));
+    const labX = 22 + labW;                 // right edge of the model names
+    const P1L = labX + 18, P2R = CW - 30, GX = 70;
+    const plotW = (P2R - P1L - GX) / 2;
+    const P1R = P1L + plotW, P2L = P1R + GX;
+    const rowTop = HDR + 8 + PT, plotBot = rowTop + N * ROW;
+    const TOTAL_H = plotBot + AX + 12;
+    const rowY = i => rowTop + i * ROW + ROW / 2;
+
+    this._layout = { orient: 'vertical', data, N, maxP, maxI, CW, TOTAL_H,
+                     ROW, barH, rowTop, plotBot, rowY, labX, P1L, P1R, P2L, P2R, plotW };
+
+    const b = this._resetCanvases(CW, TOTAL_H);
+    this._drawHeader(b, CW, MR);
+
+    const drawPanel = (x0, x1, pL, vals, maxV, title, axLbl, ct, cb2, fmtFn) => {
+      b.fillStyle = '#1e293b';
+      b.beginPath(); b.roundRect(x0, HDR + 8, x1 - x0, TOTAL_H - HDR - 14, 12); b.fill();
+      b.fillStyle = '#f1f5f9'; b.font = 'bold 13px Segoe UI,Arial'; b.textAlign = 'center';
+      b.fillText(title, pL + plotW / 2, HDR + 32);
+      for (let g = 0; g <= 5; g++) {
+        const gx = pL + (g / 5) * plotW;
+        b.strokeStyle = 'rgba(148,163,184,0.1)'; b.lineWidth = 1;
+        b.beginPath(); b.moveTo(gx, rowTop); b.lineTo(gx, plotBot); b.stroke();
+        b.fillStyle = '#64748b'; b.font = '11px Arial'; b.textAlign = 'center';
+        b.fillText(fmtFn(maxV * g / 5), gx, plotBot + 16);
+      }
+      b.fillStyle = '#94a3b8'; b.font = '12px Arial'; b.textAlign = 'center';
+      b.fillText(axLbl, pL + plotW / 2, plotBot + 36);
+      b.strokeStyle = '#334155'; b.lineWidth = 1.5;
+      b.beginPath(); b.moveTo(pL, rowTop); b.lineTo(pL, plotBot); b.lineTo(pL + plotW, plotBot); b.stroke();
+      vals.forEach((v, i) => {
+        // A null value (no published price) is a zero-length bar labelled n/a.
+        const na = v === null;
+        const bw = na ? 0 : (v / maxV) * plotW, by = rowY(i) - barH / 2;
+        if (!na) {
+          const gr = b.createLinearGradient(pL, 0, pL + bw, 0);
+          gr.addColorStop(0, cb2); gr.addColorStop(1, ct);
+          b.fillStyle = gr; b.beginPath(); b.roundRect(pL, by, bw, barH, [0, 3, 3, 0]); b.fill();
+        }
+        b.fillStyle = na ? '#64748b' : '#e2e8f0'; b.font = 'bold 10px Arial';
+        b.textAlign = 'left'; b.textBaseline = 'middle';
+        b.fillText(na ? 'n/a' : fmtFn(v), pL + bw + 8, rowY(i));   // clears the marker dot
+        b.textBaseline = 'alphabetic';
+      });
+    };
+
+    drawPanel(6, P1R + 20, P1L, data.map(d => d.intel), maxI,
+      'Artificial Analysis Intelligence Index (AAII)', 'Intelligence Score',
+      '#818cf8', '#312e81', v => Math.round(v) + '');
+    drawPanel(P2L - 20, CW - 6, P2L, data.map(d => d.price), maxP,
+      'Blended Price (USD / 1M Tokens)', 'USD / 1M Tokens',
+      '#fb923c', '#7c2d12', v => '$' + v.toFixed(2));
+
+    // Connectors between the two panels, then the model names with their dots.
+    for (let i = 0; i < N; i++) {
+      b.strokeStyle = 'rgba(51,65,85,0.4)'; b.setLineDash([2, 5]); b.lineWidth = 1;
+      b.beginPath(); b.moveTo(P1R + 20, rowY(i)); b.lineTo(P2L - 20, rowY(i)); b.stroke();
+      b.setLineDash([]);
+      b.fillStyle = data[i].open ? '#4ade80' : '#f87171';
+      b.beginPath(); b.arc(P1L - 9, rowY(i), 3, 0, Math.PI * 2); b.fill();
+      this._drawLabel(b, i, null);
+    }
+  },
+
+  // Draw one model name at its axis position. With `color` set, the name gets
+  // the high-contrast highlight box, outlined in that comparison line's color.
+  _drawLabel(ctx, i, color) {
+    const L = this._layout, d = L.data[i];
+    ctx.save();
+    if (L.orient === 'vertical') {
+      ctx.translate(L.labX, L.rowY(i));
+    } else {
+      ctx.translate(L.cxFn(i), L.c2Y + L.CH + 12); ctx.rotate(-Math.PI / 2);
+    }
+    ctx.font = (color || d.open ? 'bold ' : '') + '11px Arial';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    if (color) {
+      const hi = d.open ? this.LABEL_HI.open : this.LABEL_HI.closed;
+      const w = ctx.measureText(d.model).width;
+      ctx.fillStyle = hi.bg;
+      ctx.beginPath(); ctx.roundRect(-w - 5, -8, w + 9, 16, 3); ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = hi.fg;
+    } else {
+      ctx.fillStyle = d.open ? '#4ade80' : '#f87171';
+    }
+    ctx.fillText(d.model, 0, 0);
+    ctx.restore();
   },
 
   // ── Hover / crosshair ─────────────────────────────────────────────────────
   // Map a mouse event to a model index, or -1 if outside the plot area.
   _idxFromEvent(e) {
     if (!this._layout) return -1;
-    const { CW, ML, MR, N, stepX } = this._layout;
+    const L = this._layout;
     const r = document.getElementById('hit').getBoundingClientRect();
+    if (L.orient === 'vertical') {
+      const cy = (e.clientY - r.top) / (r.height / L.TOTAL_H);
+      if (cy < L.rowTop || cy > L.plotBot) return -1;
+      return Math.max(0, Math.min(L.N-1, Math.floor((cy - L.rowTop) / L.ROW)));
+    }
+    const { CW, ML, MR, N, stepX } = L;
     const cx = (e.clientX - r.left) / (r.width / CW);
     if (cx < ML || cx > CW-MR) return -1;
     return Math.max(0, Math.min(N-1, Math.floor((cx-ML)/stepX)));
@@ -599,10 +730,17 @@ const app = {
   // its two bars outlined, and a dot at each bar top. No text — the bars and the
   // axis label underneath already carry the values and the name.
   _drawMarker(idx, color, order, pinned) {
-    const { data, maxP, maxI, c1Y, c2Y, CH, barW, mxFn, cxFn } = this._layout;
+    const L = this._layout;
     const h = document.getElementById('hit').getContext('2d');
-    if (idx < 0 || idx >= data.length) return;
+    if (idx < 0 || idx >= L.data.length) return;
+    if (L.orient === 'vertical') this._drawMarkerV(h, idx, color, pinned);
+    else this._drawMarkerH(h, idx, color, pinned);
+    this._drawLabel(h, idx, color);   // highlight the model name on the axis
+  },
 
+  // Vertical rule through both column charts (horizontal orientation).
+  _drawMarkerH(h, idx, color, pinned) {
+    const { data, maxP, maxI, c1Y, c2Y, CH, barW, mxFn, cxFn } = this._layout;
     const d = data[idx];
     const x = cxFn(idx), bx = mxFn(idx);
     const topY = c1Y, botY = c2Y + CH;
@@ -625,6 +763,33 @@ const app = {
     // Dot at each bar top.
     [by1, by2].forEach(dy => {
       h.fillStyle = color; h.beginPath(); h.arc(x, dy, 4, 0, Math.PI * 2); h.fill();
+      h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
+    });
+
+    h.globalAlpha = 1;
+  },
+
+  // Horizontal rule through both row charts (vertical orientation).
+  _drawMarkerV(h, idx, color, pinned) {
+    const { data, maxP, maxI, rowY, barH, P1L, P2L, P2R, plotW } = this._layout;
+    const d = data[idx];
+    const y = rowY(idx), by = y - barH / 2;
+    const bw1 = (d.intel / maxI) * plotW;
+    const bw2 = d.price === null ? 0 : (d.price / maxP) * plotW;
+
+    h.globalAlpha = pinned ? 1 : 0.6;
+
+    h.strokeStyle = color; h.lineWidth = pinned ? 2 : 1.5;
+    h.setLineDash(pinned ? [] : [5, 4]);
+    h.beginPath(); h.moveTo(P1L, y); h.lineTo(P2R, y); h.stroke();
+    h.setLineDash([]);
+
+    h.strokeStyle = color; h.lineWidth = 2;
+    h.strokeRect(P1L - 1, by - 1, bw1 + 2, barH + 2);
+    h.strokeRect(P2L - 1, by - 1, bw2 + 2, barH + 2);
+
+    [P1L + bw1, P2L + bw2].forEach(dx => {
+      h.fillStyle = color; h.beginPath(); h.arc(dx, y, 4, 0, Math.PI * 2); h.fill();
       h.strokeStyle = '#fff'; h.lineWidth = 1.5; h.stroke();
     });
 
@@ -676,6 +841,40 @@ const app = {
     }
   },
 
+  // ── Remembered control settings (per browser) ─────────────────────────────
+  // filterCreator is applied in populateCreatorFilter, because its options only
+  // exist after the data loads.
+  PREF_IDS: ['orient', 'topN', 'sortBy', 'filterOpen', 'filterCreator', 'includeNoPrice'],
+  prefs: {},
+
+  loadPrefs() {
+    try { this.prefs = JSON.parse(localStorage.getItem('llmlb-prefs')) || {}; } catch (e) { this.prefs = {}; }
+    try { this.prefs.orient ??= localStorage.getItem('llmlb-orient') ?? undefined; } catch (e) {}   // older key
+    for (const id of this.PREF_IDS) {
+      const el = document.getElementById(id), v = this.prefs[id];
+      if (v === undefined || id === 'filterCreator') continue;
+      if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+    }
+    document.getElementById('topNVal').textContent = document.getElementById('topN').value;
+  },
+
+  savePrefs() {
+    for (const id of this.PREF_IDS) {
+      const el = document.getElementById(id);
+      this.prefs[id] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    try { localStorage.setItem('llmlb-prefs', JSON.stringify(this.prefs)); } catch (e) {}
+  },
+
+  // ── Sidebar collapse (remembered per browser) ─────────────────────────────
+  toggleSidebar(collapsed) {
+    const sb = document.getElementById('sidebar');
+    const c = typeof collapsed === 'boolean' ? collapsed : !sb.classList.contains('collapsed');
+    sb.classList.toggle('collapsed', c);
+    document.getElementById('sb-toggle').textContent = c ? '☰' : '◀';
+    try { localStorage.setItem('llmlb-sidebar', c ? '1' : '0'); } catch (e) {}
+  },
+
   // ── Refresh ───────────────────────────────────────────────────────────────
   async refresh() {
     await this.fetchData();
@@ -688,15 +887,18 @@ const app = {
     const buildEl = document.getElementById('build');
     buildEl.textContent = buildEl.textContent.includes('__') ? 'dev build' : 'build ' + buildEl.textContent;
 
-    // Control listeners
+    try { if (localStorage.getItem('llmlb-sidebar') === '1') this.toggleSidebar(true); } catch (e) {}
+
+    // Control settings: restored from the last visit, saved on every change.
+    this.loadPrefs();
     document.getElementById('topN').addEventListener('input', e => {
       document.getElementById('topNVal').textContent = e.target.value;
+      this.savePrefs();
       this.draw();
     });
-    document.getElementById('sortBy').addEventListener('change', () => this.draw());
-    document.getElementById('filterOpen').addEventListener('change', () => this.draw());
-    document.getElementById('filterCreator').addEventListener('change', () => this.draw());
-    document.getElementById('includeNoPrice').addEventListener('change', () => this.draw());
+    for (const id of ['orient', 'sortBy', 'filterOpen', 'filterCreator', 'includeNoPrice']) {
+      document.getElementById(id).addEventListener('change', () => { this.savePrefs(); this.draw(); });
+    }
 
     // Lock the crosshair when the mouse is released anywhere (even outside the chart)
     document.addEventListener('mouseup', () => this.endDrag());
