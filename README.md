@@ -13,10 +13,12 @@ by a scheduled GitHub Action — never by the browser.
 ```
 GitHub Action (on push to main, + cron twice daily)
   → fetch artificialanalysis.ai server-side (no CORS proxy)
-  → parse the leaderboard table   (scripts/scrape.mjs)
+  → parse the structured model payload (scripts/scrape.mjs)
   → classify open/closed weights  (scripts/classify.mjs)
         curated lists for known creators + Hugging Face lookup for unknown ones
-  → commit refreshed data.json IF it changed   (row: model, creator, intel, price, open)
+  → read input modality from AA model pages (new models only; cached in data.json)
+  → commit refreshed data.json IF it changed
+        (row: model, creator, intel, price, open, multimodal)
   → stamp the commit SHA into index.html and deploy to Pages (Actions artifact)
 index.html  → fetch ./data.json  (same origin, static)
 ```
@@ -45,8 +47,17 @@ the Action or consume any quota:
 | `data.json` | Scraped leaderboard data, committed by the Action. |
 | `scripts/scrape.mjs` | Server-side scraper (Node 22, no dependencies). |
 | `scripts/classify.mjs` | Open/closed classification (curated lists + Hugging Face). |
+| `scripts/openweights.mjs` | AA payload parsing for open weights and input modalities. |
 | `scripts/serve.mjs` | Zero-dependency static server for local preview. |
-| `.github/workflows/update-leaderboard.yml` | Scheduled updater. |
+| `.github/workflows/deploy.yml` | Scheduled updater and Pages deployment. |
+
+## Filters and saved views
+
+The company control supports searching and selecting multiple companies. The
+modality control distinguishes text-only models from models with image, speech,
+or video input; `Unknown` covers rows whose source modality is unavailable.
+All chart controls, including both filters, are stored in browser `localStorage`
+and restored on the next visit.
 
 ## Preview the page locally
 

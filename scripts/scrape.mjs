@@ -2,41 +2,19 @@
 // Server-side scraper for the Artificial Analysis models leaderboard.
 //
 // Runs in GitHub Actions (no browser, no CORS proxy). Fetches the public page,
-// parses the server-rendered table, and writes data.json. Open/closed weight
-// classification is left to the client (index.html) so this stays minimal.
+// parses its structured model payload, and writes data.json. It also resolves
+// open/closed weights and text-only/multimodal inputs from AA's model payloads.
 //
 // Exit codes: 0 = wrote/updated data; 2 = scrape produced too few rows (kept
 // the previous data.json untouched so a bad scrape never destroys good data).
 
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { classifyModels } from './classify.mjs';
-import { extractOpenWeights } from './openweights.mjs';
+import { extractOpenWeights, extractModalities } from './openweights.mjs';
 
 const SOURCE = 'https://artificialanalysis.ai/leaderboards/models';
 const OUT = new URL('../data.json', import.meta.url);
-const MIN_ROWS = 30; // sanity floor; the page normally has ~200
-
-// Column indices within each <tr>, matching the page's table layout:
-// 0=Model  1=Context  2=Creator  3=Intelligence  4=Blended price
-const COL = { model: 0, creator: 2, intel: 3, price: 4 };
-
-function decodeEntities(s) {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n));
-}
-
-function cellText(tdHtml) {
-  return decodeEntities(tdHtml.replace(/<[^>]+>/g, ' '))
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+const MIN_ROWS = 30; // sanity floor; the structured payload normally has ~200
 
 async function fetchPage(url) {
   const res = await fetch(url, {
@@ -51,41 +29,80 @@ async function fetchPage(url) {
   return res.text();
 }
 
-function parse(html) {
-  const table = (html.match(/<table[\s\S]*?<\/table>/) || [''])[0];
-  if (!table) throw new Error('no <table> found in page');
-
-  const rows = [...table.matchAll(/<tr\b[\s\S]*?<\/tr>/g)].map((m) => m[0]);
+function parse(authoritative) {
   const out = [];
   const seen = new Set();
-
-  for (const row of rows) {
-    const cells = [...row.matchAll(/<td\b[\s\S]*?<\/td>/g)].map((m) => cellText(m[0]));
-    if (cells.length < 5) continue; // header / non-data rows
-
-    const model = (cells[COL.model] || '').split('\n')[0].trim();
-    const creator = (cells[COL.creator] || '').split('\n')[0].trim() || 'Unknown';
-    const intel = parseFloat(cells[COL.intel]);
-    const rawPrice = parseFloat((cells[COL.price] || '').replace(/[$,]/g, ''));
-    // AA prints "--" in Price until it prices a newly listed model, which can
-    // lag the listing by days. Carry that as null and keep the model, so the
-    // intelligence chart is complete; the page decides whether to show it.
-    const price = isNaN(rawPrice) || rawPrice < 0 ? null : rawPrice;
-
-    // Intelligence is the only hard requirement — a row with no AAII score has
-    // nothing to plot on either chart.
-    if (!model || isNaN(intel)) continue;
-    const key = model + '|' + creator;
+  for (const r of authoritative.records || []) {
+    if (!r.name || r.intel === null) continue;
+    const key = r.name + '|' + r.creator;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push([model, creator, intel, price]);
+    // Preserve the leaderboard's original 3:1 input/output blended token price.
+    const price = r.inputPrice !== null && r.outputPrice !== null
+      ? Number(((3 * r.inputPrice + r.outputPrice) / 4).toFixed(4))
+      : null;
+    out.push([r.name, r.creator, r.intel, price]);
   }
   return out;
 }
 
+// Modality lives on model detail pages rather than the leaderboard payload.
+// Reuse values already committed in data.json and fetch only unresolved models.
+// Detail pages include comparison records too, so each response can fill others.
+async function addModalities(models, authoritative, previous) {
+  const cache = new Map(
+    previous.filter(m => typeof m[5] === 'boolean').map(m => [m[0] + '|' + m[1], m[5]])
+  );
+  const out = models.map(m => [...m, cache.get(m[0] + '|' + m[1]) ?? null]);
+  const cached = out.filter(m => typeof m[5] === 'boolean').length;
+  const groups = new Map();
+
+  out.forEach((m, i) => {
+    if (m[5] !== null) return;
+    const slug = authoritative.get(m[0])?.slug;
+    if (!slug) return;
+    if (!groups.has(slug)) groups.set(slug, []);
+    groups.get(slug).push(i);
+  });
+
+  const queue = [...groups];
+  let cursor = 0, fetched = 0, failed = 0;
+  const resolve = details => {
+    out.forEach((m, i) => {
+      if (m[5] !== null) return;
+      const slug = authoritative.get(m[0])?.slug;
+      const d = details.get(m[0]) || (slug && details.get(slug));
+      if (d) m[5] = d.multimodal;
+    });
+  };
+
+  async function worker() {
+    while (cursor < queue.length) {
+      const [slug, indexes] = queue[cursor++];
+      if (indexes.every(i => out[i][5] !== null)) continue;
+      try {
+        const html = await fetchPage(new URL('/models/' + encodeURIComponent(slug), SOURCE).href);
+        fetched++;
+        resolve(extractModalities(html));
+      } catch (e) {
+        failed++;
+        console.warn(`Modality fetch failed for ${slug}: ${e.message}`);
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker));
+  return {
+    models: out,
+    report: { cached, fetched, failed, unknown: out.filter(m => m[5] === null).length },
+  };
+}
+
 async function main() {
+  const previous = existsSync(OUT) ? JSON.parse(readFileSync(OUT, 'utf8')).models || [] : [];
   const html = await fetchPage(SOURCE);
-  const parsed = parse(html);
+  const authoritative = extractOpenWeights(html);
+  const parsed = parse(authoritative);
   const unpriced = parsed.filter((m) => m[3] === null).length;
   console.log(`Parsed ${parsed.length} models (${unpriced} with no published price).`);
 
@@ -97,9 +114,8 @@ async function main() {
     process.exit(2);
   }
 
-  // AA ships a per-model isOpenWeights flag in the page. Read it and let it
-  // settle every model it covers; the curated lists handle the rest.
-  const authoritative = extractOpenWeights(html);
+  // AA ships per-model metadata in its structured payload. Use the same records
+  // for open weights, creator, pricing and the detail-page slug.
   const covered = parsed.filter((m) => authoritative.has(m[0])).length;
   console.log(
     `Open-weights payload: ${authoritative.recordCount || 0} records, ` +
@@ -120,21 +136,28 @@ async function main() {
       `${report.hfOpen} HF-open, ${report.hfClosedOrUnknown} HF-closed/unknown.`
   );
 
+  const modality = await addModalities(models, authoritative, previous);
+  console.log(
+    `Modalities: ${modality.report.cached} cached, ` +
+      `${models.length - modality.report.cached - modality.report.unknown} resolved, ` +
+      `${modality.report.unknown} unknown; ${modality.report.fetched} detail pages fetched` +
+      (modality.report.failed ? `, ${modality.report.failed} failed.` : '.')
+  );
+
   {
     const payload = {
       source: SOURCE,
       updated: new Date().toISOString(),
-      count: models.length,
-      // [model, creator, intelligenceIndex, blendedUsdPer1M|null, openWeights]
-      models,
+      count: modality.models.length,
+      // [model, creator, intelligenceIndex, blendedUsdPer1M|null, openWeights, multimodal|null]
+      models: modality.models,
     };
     const json = JSON.stringify(payload, null, 0) + '\n';
 
     // Skip the write if only the timestamp would change, so the workflow's
     // "commit if changed" check stays meaningful.
     if (existsSync(OUT)) {
-      const prev = JSON.parse(readFileSync(OUT, 'utf8'));
-      const same = JSON.stringify(prev.models) === JSON.stringify(models);
+      const same = JSON.stringify(previous) === JSON.stringify(modality.models);
       if (same) {
         console.log('No model changes since last run; leaving data.json as is.');
         return;
@@ -142,7 +165,7 @@ async function main() {
     }
 
     writeFileSync(OUT, json);
-    console.log(`Wrote ${OUT.pathname} (${models.length} models).`);
+    console.log(`Wrote ${OUT.pathname} (${modality.models.length} models).`);
   }
 }
 

@@ -87,6 +87,7 @@ export function extractOpenWeights(html) {
 
   let at = 0;
   let records = 0;
+  const entries = [];
   for (;;) {
     const i = flight.indexOf('"isOpenWeights"', at);
     if (i < 0) break;
@@ -104,12 +105,66 @@ export function extractOpenWeights(html) {
 
     records++;
     const entry = {
+      name: r.shortName || r.name,
+      creator: r.modelCreatorName || 'Unknown',
+      intel: typeof r.intelligenceIndex === 'number' ? r.intelligenceIndex : null,
+      inputPrice: typeof r.price1mInputTokens === 'number' ? r.price1mInputTokens : null,
+      outputPrice: typeof r.price1mOutputTokens === 'number' ? r.price1mOutputTokens : null,
       open: r.isOpenWeights,
       license: r.licenseName || null,
       hf: r.huggingfaceUrl || null,
+      slug: r.slug || r.release?.slug || null,
     };
+    entries.push(entry);
     if (r.name && !map.has(r.name)) map.set(r.name, entry);
     if (r.shortName) map.set(r.shortName, entry);   // table name — always authoritative
+  }
+
+  map.recordCount = records;
+  map.records = entries;
+  return map;
+}
+
+// Extract input modalities from every full model record on a model detail page.
+// A detail page also embeds its comparison models, so one request can resolve
+// several leaderboard rows. Multimodal follows AA's "Multimodal Inputs"
+// definition: image, speech or video input alongside text-only as the fallback.
+export function extractModalities(html) {
+  const flight = rebuildFlight(html);
+  const map = new Map();
+  if (!flight) return map;
+
+  let at = 0;
+  let records = 0;
+  for (;;) {
+    const i = flight.indexOf('"inputModalityText"', at);
+    if (i < 0) break;
+    at = i + 19;
+    const raw = objectAround(flight, i);
+    if (!raw) continue;
+
+    let r;
+    try {
+      r = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+
+    const flags = ['Text', 'Image', 'Speech', 'Video'];
+    if (!flags.every(flag => typeof r[`inputModality${flag}`] === 'boolean')) continue;
+
+    records++;
+    const input = flags
+      .filter(flag => r[`inputModality${flag}`])
+      .map(flag => flag.toLowerCase());
+    const entry = {
+      multimodal: input.some(m => m !== 'text'),
+      input,
+      slug: r.slug || r.release?.slug || null,
+    };
+    if (r.name && !map.has(r.name)) map.set(r.name, entry);
+    if (r.shortName) map.set(r.shortName, entry);
+    if (entry.slug && !map.has(entry.slug)) map.set(entry.slug, entry);
   }
 
   map.recordCount = records;

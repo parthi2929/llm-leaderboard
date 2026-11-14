@@ -9,7 +9,7 @@
   body{background:#0f172a;color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;min-height:100vh}
   #app{display:flex;gap:12px;align-items:flex-start;max-width:1700px;margin:0 auto;padding:8px 12px 16px}
   #main{flex:1;min-width:0}
-  #sidebar{flex:0 0 210px;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow-y:auto;
+  #sidebar{flex:0 0 230px;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow-y:auto;
            background:#1e293b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:12px}
   #sidebar.collapsed{flex-basis:38px;padding:10px 6px}
   #sidebar.collapsed .sb-body,#sidebar.collapsed .sb-title{display:none}
@@ -19,9 +19,24 @@
   #sb-toggle:hover{color:#f1f5f9}
   .sb-body{display:flex;flex-direction:column;gap:12px}
   .field{display:flex;flex-direction:column;gap:4px}
-  .field>label{font-size:11px;color:#94a3b8}
+  .field>label,.label-row>label{font-size:11px;color:#94a3b8}
   .row{display:flex;align-items:center;gap:8px}
   select{width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:12px}
+  input[type=search]{width:100%;background:#0f172a;color:#f1f5f9;border:1px solid #475569;border-radius:5px;padding:6px 7px;font-size:12px;outline:none}
+  input[type=search]::placeholder{color:#94a3b8}
+  input[type=search]:focus,select:focus-visible,.creator-clear:focus-visible,.creator-all:focus-visible{outline:2px solid #818cf8;outline-offset:2px}
+  [hidden]{display:none!important}
+  .label-row{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .creator-clear{border:0;background:none;color:#c4b5fd;cursor:pointer;font-size:11px;padding:0}
+  .creator-clear:hover{color:#ede9fe;text-decoration:underline}
+  .creator-options{margin-top:4px;max-height:220px;overflow-y:auto;background:#0f172a;border:1px solid #475569;border-radius:6px}
+  .creator-option{display:flex;align-items:center;gap:7px;padding:6px 7px;color:#e2e8f0;font-size:12px;line-height:1.3;cursor:pointer}
+  .creator-option:hover{background:#1e293b}
+  .creator-option input{width:13px;height:13px;margin:0;flex:none;accent-color:#818cf8}
+  .creator-all{width:100%;border:0;border-bottom:1px solid #334155;background:none;color:#c4b5fd;text-align:left;padding:7px;cursor:pointer;font-size:12px}
+  .creator-all:hover{background:#1e293b}
+  .creator-empty{padding:10px 7px;color:#94a3b8;font-size:11px}
+  .filter-summary{color:#94a3b8;font-size:11px;line-height:1.4}
   input[type=range]{flex:1;min-width:0}
   .check{font-size:12px;color:#cbd5e1;cursor:pointer;display:flex;align-items:center;gap:6px}
   .btn{width:100%;color:white;border:none;padding:6px 10px;border-radius:7px;cursor:pointer;font-size:12px;font-weight:600}
@@ -82,10 +97,27 @@
           <option value="closed">Closed</option>
         </select>
       </div>
+      <div class="field" id="creatorPicker">
+        <div class="label-row">
+          <label for="creatorSearch">Companies</label>
+          <button type="button" id="creatorClear" class="creator-clear" hidden>Clear</button>
+        </div>
+        <input type="search" id="creatorSearch" placeholder="Search companies…" autocomplete="off"
+               role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="creatorOptions">
+        <div id="creatorOptions" class="creator-options" hidden>
+          <button type="button" id="creatorAll" class="creator-all">All companies</button>
+          <div id="creatorList" role="group" aria-label="Company choices"></div>
+          <div id="creatorEmpty" class="creator-empty" hidden>No companies match.</div>
+        </div>
+        <div id="creatorSummary" class="filter-summary" aria-live="polite">All companies</div>
+      </div>
       <div class="field">
-        <label for="filterCreator">Company</label>
-        <select id="filterCreator">
+        <label for="filterModality">Input modality</label>
+        <select id="filterModality" title="Multimodal models accept image, speech, or video input">
           <option value="all">All</option>
+          <option value="text">Text only</option>
+          <option value="multimodal">Multimodal</option>
+          <option value="unknown">Unknown</option>
         </select>
       </div>
       <label class="check" for="includeNoPrice">
@@ -229,6 +261,7 @@ const MODEL_OVERRIDES = {
 // ─── STATE ────────────────────────────────────────────────────────────────────
 const app = {
   allData: [],
+  selectedCreators: [],
   openCache: {},   // model_name_lower → true/false
   hfCache: {},     // creator_lower → Promise<bool>
   lastFetch: null,
@@ -292,30 +325,99 @@ const app = {
   // Map tuples into full records. data.json carries an authoritative open flag
   // as a 5th element (resolved server-side via curated lists + Hugging Face); the
   // embedded snapshot has 4 elements, so fall back to the local heuristic there.
+  // Element 6 is true for image/speech/video input, false for text-only, and
+  // null when the source has not supplied modality data yet.
   mapTuples(tuples) {
     // price is null when Artificial Analysis has not published one yet.
-    return tuples.map(([model, creator, intel, price, open]) => ({
+    return tuples.map(([model, creator, intel, price, open, multimodal]) => ({
       model, creator, intel,
       price: typeof price === 'number' ? price : null,
-      open: typeof open === 'boolean' ? open : this.isOpen(model, creator)
+      open: typeof open === 'boolean' ? open : this.isOpen(model, creator),
+      multimodal: typeof multimodal === 'boolean' ? multimodal : null
     }));
   },
 
-  // ── Rebuild the Company filter options from the loaded data ───────────────
-  // Runs whenever a new dataset lands (snapshot or data.json). Shows per-company
-  // model counts and preserves the current selection when the company still exists.
-  populateCreatorFilter() {
-    const sel = document.getElementById('filterCreator');
-    const prev = this.prefs.filterCreator || sel.value || 'all';
+  // ── Rebuild the searchable Company multi-select from the loaded data ──────
+  populateCreatorFilter(pruneMissing = false) {
     const counts = new Map();
     for (const d of this.allData) counts.set(d.creator, (counts.get(d.creator) || 0) + 1);
-    const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     const creators = [...counts.keys()].sort((a, b) => a.localeCompare(b));
-    sel.innerHTML = '<option value="all">All</option>' +
-      creators.map(c =>
-        `<option value="${esc(c)}">${esc(c)} (${counts.get(c)})</option>`
-      ).join('');
-    sel.value = (prev === 'all' || creators.includes(prev)) ? prev : 'all';
+    const previousCount = this.selectedCreators.length;
+    if (pruneMissing) {
+      const available = new Set(creators);
+      this.selectedCreators = this.selectedCreators.filter(c => available.has(c));
+    }
+    const list = document.getElementById('creatorList');
+    list.replaceChildren();
+
+    for (const creator of creators) {
+      const label = document.createElement('label');
+      label.className = 'creator-option';
+      label.dataset.name = creator.toLowerCase();
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = this.selectedCreators.includes(creator);
+      checkbox.addEventListener('change', () => this.setCreator(creator, checkbox.checked));
+      const text = document.createElement('span');
+      text.textContent = `${creator} (${counts.get(creator)})`;
+      label.append(checkbox, text);
+      list.append(label);
+    }
+
+    this.updateCreatorSummary();
+    this.filterCreatorOptions();
+    if (pruneMissing && previousCount !== this.selectedCreators.length) this.savePrefs();
+  },
+
+  setCreator(creator, checked) {
+    const selected = new Set(this.selectedCreators);
+    if (checked) selected.add(creator); else selected.delete(creator);
+    this.selectedCreators = [...selected];
+    this.updateCreatorSummary();
+    this.savePrefs();
+    this.draw();
+  },
+
+  clearCreators() {
+    this.selectedCreators = [];
+    document.querySelectorAll('#creatorList input').forEach(cb => { cb.checked = false; });
+    this.updateCreatorSummary();
+    this.savePrefs();
+    this.draw();
+  },
+
+  updateCreatorSummary() {
+    const n = this.selectedCreators.length;
+    const summary = document.getElementById('creatorSummary');
+    summary.textContent = n === 0 ? 'All companies' :
+      n <= 2 ? this.selectedCreators.join(', ') : `${n} companies selected`;
+    summary.title = n ? this.selectedCreators.join(', ') : 'Show every company';
+    document.getElementById('creatorClear').hidden = n === 0;
+  },
+
+  openCreatorPicker() {
+    document.getElementById('creatorOptions').hidden = false;
+    document.getElementById('creatorSearch').setAttribute('aria-expanded', 'true');
+  },
+
+  closeCreatorPicker() {
+    const options = document.getElementById('creatorOptions');
+    if (options.hidden) return;
+    options.hidden = true;
+    const search = document.getElementById('creatorSearch');
+    search.setAttribute('aria-expanded', 'false');
+    search.value = '';
+    this.filterCreatorOptions();
+  },
+
+  filterCreatorOptions() {
+    const query = document.getElementById('creatorSearch').value.trim().toLowerCase();
+    let visible = 0;
+    document.querySelectorAll('#creatorList .creator-option').forEach(label => {
+      label.hidden = !!query && !label.dataset.name.includes(query);
+      if (!label.hidden) visible++;
+    });
+    document.getElementById('creatorEmpty').hidden = visible > 0;
   },
 
   // ── Load the embedded snapshot as a fallback ──────────────────────────────
@@ -337,7 +439,7 @@ const app = {
       if (!Array.isArray(tuples) || tuples.length === 0) throw new Error('no rows in data.json');
 
       this.allData = this.mapTuples(tuples);
-      this.populateCreatorFilter();
+      this.populateCreatorFilter(true);
       this.lastFetch = payload.updated ? new Date(payload.updated) : new Date();
 
       const openCount = this.allData.filter(d => d.open).length;
@@ -366,14 +468,18 @@ const app = {
     const topN    = parseInt(document.getElementById('topN').value);
     const sortBy  = document.getElementById('sortBy').value;
     const filterO = document.getElementById('filterOpen').value;
-    const creatorF = document.getElementById('filterCreator').value;
+    const modalityF = document.getElementById('filterModality').value;
+    const creators = new Set(this.selectedCreators);
     const withNoPrice = document.getElementById('includeNoPrice').checked;
 
     let data = [...this.allData];
     if (!withNoPrice) data = data.filter(d => d.price !== null);
     if (filterO === 'open')   data = data.filter(d => d.open);
     if (filterO === 'closed') data = data.filter(d => !d.open);
-    if (creatorF !== 'all')   data = data.filter(d => d.creator === creatorF);
+    if (modalityF === 'text') data = data.filter(d => d.multimodal === false);
+    if (modalityF === 'multimodal') data = data.filter(d => d.multimodal === true);
+    if (modalityF === 'unknown') data = data.filter(d => d.multimodal === null);
+    if (creators.size) data = data.filter(d => creators.has(d.creator));
 
     // Sort. Price-less models have no rank on a price axis, so they always go
     // last on both price sorts instead of colliding at zero.
@@ -393,7 +499,16 @@ const app = {
   // ── Draw charts ───────────────────────────────────────────────────────────
   draw() {
     const data = this.getDisplayData();
-    if (!data.length) return;
+    if (!data.length) {
+      this.pins = [];
+      this._layout = null;
+      const b = this._resetCanvases(this.CW, 180);
+      b.fillStyle = '#f1f5f9'; b.font = 'bold 16px Segoe UI,Arial'; b.textAlign = 'center';
+      b.fillText('No models match these filters', this.CW / 2, 78);
+      b.fillStyle = '#94a3b8'; b.font = '12px Segoe UI,Arial';
+      b.fillText('Adjust the company, modality, weights, or price filters.', this.CW / 2, 106);
+      return;
+    }
 
     // Redrawing resizes (and clears) the overlay canvas. Preserve comparison
     // lines across re-renders (sort/filter/topN/refresh) by model identity, so
@@ -842,17 +957,21 @@ const app = {
   },
 
   // ── Remembered control settings (per browser) ─────────────────────────────
-  // filterCreator is applied in populateCreatorFilter, because its options only
-  // exist after the data loads.
-  PREF_IDS: ['orient', 'topN', 'sortBy', 'filterOpen', 'filterCreator', 'includeNoPrice'],
+  // Company selections apply after the data loads; the old single-company
+  // string is migrated to the new array without discarding the saved view.
+  PREF_IDS: ['orient', 'topN', 'sortBy', 'filterOpen', 'filterModality', 'includeNoPrice'],
   prefs: {},
 
   loadPrefs() {
     try { this.prefs = JSON.parse(localStorage.getItem('llmlb-prefs')) || {}; } catch (e) { this.prefs = {}; }
     try { this.prefs.orient ??= localStorage.getItem('llmlb-orient') ?? undefined; } catch (e) {}   // older key
+    const legacy = this.prefs.filterCreator;
+    const creators = Array.isArray(this.prefs.filterCreators) ? this.prefs.filterCreators :
+      (legacy && legacy !== 'all' ? [legacy] : []);
+    this.selectedCreators = [...new Set(creators.filter(c => typeof c === 'string'))];
     for (const id of this.PREF_IDS) {
       const el = document.getElementById(id), v = this.prefs[id];
-      if (v === undefined || id === 'filterCreator') continue;
+      if (v === undefined) continue;
       if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
     }
     document.getElementById('topNVal').textContent = document.getElementById('topN').value;
@@ -863,6 +982,8 @@ const app = {
       const el = document.getElementById(id);
       this.prefs[id] = el.type === 'checkbox' ? el.checked : el.value;
     }
+    this.prefs.filterCreators = [...this.selectedCreators];
+    delete this.prefs.filterCreator;
     try { localStorage.setItem('llmlb-prefs', JSON.stringify(this.prefs)); } catch (e) {}
   },
 
@@ -896,9 +1017,33 @@ const app = {
       this.savePrefs();
       this.draw();
     });
-    for (const id of ['orient', 'sortBy', 'filterOpen', 'filterCreator', 'includeNoPrice']) {
+    for (const id of ['orient', 'sortBy', 'filterOpen', 'filterModality', 'includeNoPrice']) {
       document.getElementById(id).addEventListener('change', () => { this.savePrefs(); this.draw(); });
     }
+
+    const picker = document.getElementById('creatorPicker');
+    const search = document.getElementById('creatorSearch');
+    search.addEventListener('focus', () => this.openCreatorPicker());
+    search.addEventListener('input', () => { this.openCreatorPicker(); this.filterCreatorOptions(); });
+    search.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown') return;
+      e.preventDefault();
+      this.openCreatorPicker();
+      const first = [...document.querySelectorAll('#creatorList .creator-option')]
+        .find(label => !label.hidden)?.querySelector('input');
+      if (first) first.focus();
+    });
+    picker.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      this.closeCreatorPicker();
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    });
+    document.getElementById('creatorClear').addEventListener('click', () => this.clearCreators());
+    document.getElementById('creatorAll').addEventListener('click', () => this.clearCreators());
+    document.addEventListener('pointerdown', e => {
+      if (!picker.contains(e.target)) this.closeCreatorPicker();
+    });
 
     // Lock the crosshair when the mouse is released anywhere (even outside the chart)
     document.addEventListener('mouseup', () => this.endDrag());
