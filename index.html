@@ -85,8 +85,8 @@
         <label for="sortBy">Sort</label>
         <select id="sortBy">
           <option value="intel">Intelligence</option>
-          <option value="price">Price ↑</option>
-          <option value="priceDesc">Price ↓</option>
+          <option value="price">Cost per task ↑</option>
+          <option value="priceDesc">Cost per task ↓</option>
         </select>
       </div>
       <div class="field">
@@ -640,7 +640,7 @@ const app = {
     }
 
     drawChart(c1Y, data.map(d=>d.price), maxP,
-      'Chart 1 · Blended Price (USD / 1M Tokens)', 'USD / 1M Tokens',
+      'Chart 1 · Cost per Task (USD)', 'USD / task',
       '#fb923c','#7c2d12', v=>'$'+v.toFixed(2), false);
     drawChart(c2Y, data.map(d=>d.intel), maxI,
       'Chart 2 · Artificial Analysis Intelligence Index (AAII)', 'Intelligence Score',
@@ -708,7 +708,7 @@ const app = {
       'Artificial Analysis Intelligence Index (AAII)', 'Intelligence Score',
       '#818cf8', '#312e81', v => Math.round(v) + '');
     drawPanel(P2L - 20, CW - 6, P2L, data.map(d => d.price), maxP,
-      'Blended Price (USD / 1M Tokens)', 'USD / 1M Tokens',
+      'Cost per Task (USD)', 'USD / task',
       '#fb923c', '#7c2d12', v => '$' + v.toFixed(2));
 
     // Connectors between the two panels, then the model names with their dots.

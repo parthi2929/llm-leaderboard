@@ -37,9 +37,11 @@ function parse(authoritative) {
     const key = r.name + '|' + r.creator;
     if (seen.has(key)) continue;
     seen.add(key);
-    // Preserve the leaderboard's original 3:1 input/output blended token price.
-    const price = r.inputPrice !== null && r.outputPrice !== null
-      ? Number(((3 * r.inputPrice + r.outputPrice) / 4).toFixed(4))
+    // AA's "Cost per Task USD": what one Intelligence Index task costs. It
+    // depends on the tokens each effort level uses, so variants of one model
+    // differ. A list token price would be the same for every variant.
+    const price = r.costPerTask !== null && r.costPerTask > 0
+      ? Number(r.costPerTask.toFixed(4))
       : null;
     out.push([r.name, r.creator, r.intel, price]);
   }
@@ -149,7 +151,7 @@ async function main() {
       source: SOURCE,
       updated: new Date().toISOString(),
       count: modality.models.length,
-      // [model, creator, intelligenceIndex, blendedUsdPer1M|null, openWeights, multimodal|null]
+      // [model, creator, intelligenceIndex, costPerTaskUsd|null, openWeights, multimodal|null]
       models: modality.models,
     };
     const json = JSON.stringify(payload, null, 0) + '\n';
