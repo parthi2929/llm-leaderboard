@@ -110,6 +110,8 @@ export function extractOpenWeights(html) {
       intel: typeof r.intelligenceIndex === 'number' ? r.intelligenceIndex : null,
       inputPrice: typeof r.price1mInputTokens === 'number' ? r.price1mInputTokens : null,
       outputPrice: typeof r.price1mOutputTokens === 'number' ? r.price1mOutputTokens : null,
+      // USD to run one Intelligence Index task; AA's "Cost per Task USD" column.
+      costPerTask: typeof r.intelligenceIndexCostPerTask === 'number' ? r.intelligenceIndexCostPerTask : null,
       open: r.isOpenWeights,
       license: r.licenseName || null,
       hf: r.huggingfaceUrl || null,

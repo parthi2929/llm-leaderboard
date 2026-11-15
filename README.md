@@ -1,7 +1,7 @@
 # LLM Leaderboard
 
 A static, single-page visualization of the [Artificial Analysis](https://artificialanalysis.ai/leaderboards/models)
-models leaderboard (intelligence vs. blended price, open vs. closed weights).
+models leaderboard (intelligence vs. cost per task, open vs. closed weights).
 
 **Live page:** https://parthi2929.github.io/llm-leaderboard/
 
@@ -18,7 +18,7 @@ GitHub Action (on push to main, + cron twice daily)
         curated lists for known creators + Hugging Face lookup for unknown ones
   → read input modality from AA model pages (new models only; cached in data.json)
   → commit refreshed data.json IF it changed
-        (row: model, creator, intel, price, open, multimodal)
+        (row: model, creator, intel, costPerTaskUsd, open, multimodal)
   → stamp the commit SHA into index.html and deploy to Pages (Actions artifact)
 index.html  → fetch ./data.json  (same origin, static)
 ```
